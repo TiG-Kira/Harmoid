@@ -167,6 +167,7 @@
             android:name=".HapDetailActivity"
             android:exported="false"
             android:parentActivityName=".MainActivity"
+            android:theme="@style/Theme.Harmoid.About"
             android:label="@string/dialog_app_info_title" />
 
         <!-- 关于页：独立 Activity（与 KiTerminal-UX 的 AboutActivity 对齐） -->

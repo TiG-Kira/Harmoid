@@ -17,6 +17,11 @@
 # PATCHES（都是框架 API 变更导致的编译问题，不改变行为）：
 #   - AceWeb: WebSettings.setAppCacheEnabled/setAppCachePath 自 API 33 移除
 #   - AceWeb: MediaMetadataRetriever.release() 自 API 34 声明 throws IOException
+# 行为增强补丁（Harmoid 特有，26.10.20 起）：
+#   - SubWindowManager: setStatusBar/setNavigationBar 只认 UI_DARK_COLOR /
+#     UI_LIGHT_COLOR 两个魔法值，HAP 传任意色值图标明暗不切换 →
+#     改为按 contentColor 亮度判定，并同步走 androidx WindowInsetsController
+#     （与宿主 edge-to-edge 同管线，避免 legacy flag 被覆盖）。
 #
 # 用法：
 #   ./scripts/build_adapter_jar.sh
@@ -125,6 +130,114 @@ if applied == 0:
 else:
     print(f"  应用 {applied}/2 处补丁")
 io.open(p, "w", encoding="utf-8", newline="\n").write(s)
+
+# ---- Patch 3: SubWindowManager 系统栏图标按任意 contentColor 亮度切换 ----
+swm = glob.glob("stage/ability/java/src/**/SubWindowManager.java", recursive=True)
+if not swm:
+    sys.exit("找不到 SubWindowManager.java")
+swm = swm[0]
+s = io.open(swm, encoding="utf-8").read()
+
+# 老 setStatusBar：只认两个魔法色值
+old_sb = """            if (contentColor == UI_DARK_COLOR) {
+                this.uiOptions_ |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR; // dark color
+            } else if (contentColor == UI_LIGHT_COLOR) {
+                this.uiOptions_ &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR; // light color
+            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            decorView.setSystemUiVisibility(this.uiOptions_);
+            window.setStatusBarColor(backgroundColor);
+            return true;"""
+new_sb = """            // [adapter-jar patch] 任意 contentColor 按亮度决定图标明暗：
+            // contentColor 深（如黑字）-> 浅色底 -> isAppearanceLightStatusBars = true。
+            boolean darkContent = luminance(contentColor) < 0.5f;
+            if (contentColor == UI_DARK_COLOR) {
+                this.uiOptions_ |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR; // dark color
+            } else if (contentColor == UI_LIGHT_COLOR) {
+                this.uiOptions_ &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR; // light color
+            } else if (darkContent) {
+                this.uiOptions_ |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            } else {
+                this.uiOptions_ &= ~View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR;
+            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            decorView.setSystemUiVisibility(this.uiOptions_);
+            window.setStatusBarColor(backgroundColor);
+
+            // [adapter-jar patch] 与宿主 edge-to-edge 的 androidx 管线同源设置，
+            // 避免 legacy flag 被 WindowInsetsController 的状态覆盖后不生效。
+            androidx.core.view.WindowInsetsControllerCompat controller =
+                androidx.core.view.WindowCompat.getInsetsController(window, decorView);
+            if (controller != null) {
+                controller.setAppearanceLightStatusBars(darkContent);
+            }
+            return true;"""
+
+old_nb = """            if (contentColor == UI_DARK_COLOR) {
+                this.uiOptions_ |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR; // dark color
+            } else if (contentColor == UI_LIGHT_COLOR) {
+                this.uiOptions_ &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR; // light color
+            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            decorView.setSystemUiVisibility(this.uiOptions_);
+            window.setNavigationBarColor(backgroundColor);
+            return true;"""
+new_nb = """            // [adapter-jar patch] 与 setStatusBar 相同，任意 contentColor 按亮度切图标明暗。
+            boolean darkContent = luminance(contentColor) < 0.5f;
+            if (contentColor == UI_DARK_COLOR) {
+                this.uiOptions_ |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR; // dark color
+            } else if (contentColor == UI_LIGHT_COLOR) {
+                this.uiOptions_ &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR; // light color
+            } else if (darkContent) {
+                this.uiOptions_ |= View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            } else {
+                this.uiOptions_ &= ~View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+            }
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS);
+            decorView.setSystemUiVisibility(this.uiOptions_);
+            window.setNavigationBarColor(backgroundColor);
+
+            androidx.core.view.WindowInsetsControllerCompat controller =
+                androidx.core.view.WindowCompat.getInsetsController(window, decorView);
+            if (controller != null) {
+                controller.setAppearanceLightNavigationBars(darkContent);
+            }
+            return true;"""
+
+luminance_helper = """
+    /**
+     * [adapter-jar patch] Compute perceived luminance of an ARGB color (alpha ignored).
+     *
+     * @param color ARGB color.
+     * @return Luminance in [0, 1].
+     */
+    private static float luminance(int color) {
+        int r = (color >> 16) & 0xFF;
+        int g = (color >> 8) & 0xFF;
+        int b = color & 0xFF;
+        return (0.299f * r + 0.587f * g + 0.114f * b) / 255f;
+    }
+"""
+
+applied = 0
+if old_sb in s:
+    s = s.replace(old_sb, new_sb)
+    applied += 1
+if old_nb in s:
+    s = s.replace(old_nb, new_nb)
+    applied += 1
+# luminance helper：只加一次（幂等）
+if "private static float luminance(int color)" not in s and applied > 0:
+    anchor = "    /**\n     * Set status bar property."
+    if anchor in s:
+        s = s.replace(anchor, luminance_helper + anchor, 1)
+    else:
+        sys.exit("找不到 luminance helper 的插入锚点")
+if applied == 0:
+    print("  SubWindowManager 补丁无需应用（上游可能已修）")
+else:
+    print(f"  SubWindowManager 应用 {applied}/2 处补丁")
+io.open(swm, "w", encoding="utf-8", newline="\n").write(s)
 PY
 
 # ---------- 3. 依赖 ----------
