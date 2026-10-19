@@ -31,6 +31,15 @@ open class HoaAbilityActivity : StageActivity() {
         if (app != null && !app.initSuccess) {
             Log.e(TAG, "StageApplication init FAILED — ArkUI rendering will not work")
             Log.e(TAG, "  Error was: ${app.initError?.message}")
+            // 运行时没起来时继续走 super.onCreate() 只会在 native 里炸成
+            // SEGFAULT（Java catch 拦不住）。这里直接给出可见的错误并退栈。
+            android.app.AlertDialog.Builder(this)
+                .setTitle(R.string.dialog_init_failed_title)
+                .setMessage(getString(R.string.dialog_init_failed_msg, app.initError?.message ?: "unknown"))
+                .setPositiveButton(R.string.ok) { _, _ -> finish() }
+                .setOnCancelListener { finish() }
+                .show()
+            return
         }
 
         // Verify module exists before handing off to ArkUI-X runtime.
@@ -59,7 +68,18 @@ open class HoaAbilityActivity : StageActivity() {
 
         // 先让 decor 边到边，super.onCreate() 创建 SurfaceView 时窗口尺寸就是全屏；
         // 否则首帧会按"扣掉状态栏"的高度建表面，之后再改回来要闪一下。
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        // 这段只是窗口属性调整，任何 OEM ROM 上的意外都不该阻断 HAP 启动，
+        // 因此整体兜异常：失败了就退回系统默认行为（顶栏留白由 ArkUI 自己算）。
+        if (isEdgeToEdgeEnabled()) {
+            try {
+                androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+            } catch (e: Throwable) {
+                Log.e(TAG, "setDecorFitsSystemWindows(false) failed — 保持系统默认行为", e)
+                disableEdgeToEdgeNextLaunch(e)
+            }
+        } else {
+            Log.w(TAG, "edge-to-edge 已禁用 — 跳过 setDecorFitsSystemWindows(false)")
+        }
 
         try {
             super.onCreate(savedInstanceState)
@@ -67,8 +87,10 @@ open class HoaAbilityActivity : StageActivity() {
             Log.e(TAG, "instanceId=${getInstanceId()}, instanceName=${getInstanceName()}")
         } catch (e: UnsatisfiedLinkError) {
             Log.e(TAG, "FATAL: Native library link error during Activity onCreate", e)
+            disableEdgeToEdgeNextLaunch(e)
         } catch (e: Exception) {
             Log.e(TAG, "ERROR: Activity onCreate failed", e)
+            disableEdgeToEdgeNextLaunch(e)
         }
 
         Log.e(TAG, "========== HoaAbilityActivity onCreate END ==========")
@@ -232,6 +254,38 @@ open class HoaAbilityActivity : StageActivity() {
     //   这样 top avoid area 就等于真实状态栏高度，HAP 自己做让位（ArkUI 默认
     //   就会给页面加 safe area，只有显式 expandSafeArea 才铺到栏下）。
     private fun configureEdgeToEdgeForHap() {
+        // 自愈开关：一旦上次启动在 edge-to-edge 路径上炸过，就写持久化标记，
+        // 后续启动整体退回上游旧行为（不碰 decor fitting、不调本方法）。
+        // 既保证 app 不至于一直闪退，也能反证崩溃是不是这段改造引起的。
+        if (!isEdgeToEdgeEnabled()) {
+            Log.w(TAG, "edge-to-edge 已被上次启动的异常禁用 — 退回系统默认窗口行为")
+            return
+        }
+        // 整段兜异常：窗口属性调整失败时退回系统默认（DecorView 自己按 insets padding），
+        // HAP 照样能起来，只是避让区回到"被宿主压掉"的旧行为。
+        // 不能让一段样式调整把整个 HAP 启动搞崩。
+        try {
+            applyEdgeToEdgeForHap()
+        } catch (e: Throwable) {
+            Log.e(TAG, "configureEdgeToEdgeForHap failed — 退回系统默认窗口行为", e)
+            disableEdgeToEdgeNextLaunch(e)
+        }
+    }
+
+    private fun isEdgeToEdgeEnabled(): Boolean =
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .getBoolean(KEY_EDGE_TO_EDGE, true)
+
+    /** 启动路径炸过 → 禁用 edge-to-edge，下次启动走旧行为。 */
+    private fun disableEdgeToEdgeNextLaunch(e: Throwable) {
+        Log.e(TAG, "disableEdgeToEdgeNextLaunch: ${e.javaClass.simpleName}: ${e.message}")
+        getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_EDGE_TO_EDGE, false)
+            .apply()
+    }
+
+    private fun applyEdgeToEdgeForHap() {
         val window = this.window
         // 关键的一步：decor 不再消费 insets。
         androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -445,5 +499,9 @@ open class HoaAbilityActivity : StageActivity() {
 
     companion object {
         private const val TAG = "HOA.Ability"
+
+        /** edge-to-edge 自愈开关的存储位置（与设置页的 hoa_ui_prefs 分开，互不影响）。 */
+        private const val PREFS_NAME = "hoa_hap_window"
+        private const val KEY_EDGE_TO_EDGE = "edge_to_edge_enabled"
     }
 }

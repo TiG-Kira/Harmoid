@@ -148,7 +148,9 @@ fun SettingsScreen(
                 .padding(padding)
                 .nestedScroll(scrollBehavior.nestedScrollConnection),
             contentPadding = PaddingValues(
-                top = topBarClearance(padding) + 4.dp,
+                // 同 AppsScreen：顶部留白来自外层 Scaffold 的玻璃顶栏实时高度。
+                // 本页 Scaffold 没有 topBar，它的 padding.calculateTopPadding() 恒为 0。
+                top = LocalTopBarClearance.current + 4.dp,
                 bottom = navBarBottomPadding + 16.dp,
             )
         ) {

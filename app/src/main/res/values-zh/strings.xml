@@ -37,6 +37,8 @@
 
     <!-- HoaAbilityActivity -->
     <string name="toast_module_not_found">未找到模块: %1$s/%2$s</string>
+    <string name="dialog_init_failed_title">无法启动应用</string>
+    <string name="dialog_init_failed_msg">鸿蒙运行时初始化失败，该应用无法运行。\n\n错误：%1$s\n\n请在「设置 → 反馈」里导出日志并反馈此问题。</string>
 
     <!-- Install preview dialog -->
     <string name="dialog_install_preview_title">安装 HAP</string>

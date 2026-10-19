@@ -36,6 +36,8 @@
 
     <!-- HoaAbilityActivity -->
     <string name="toast_module_not_found">Module not found: %1$s/%2$s</string>
+    <string name="dialog_init_failed_title">Cannot start app</string>
+    <string name="dialog_init_failed_msg">The HarmonyOS runtime failed to initialize, so this app cannot run.\n\nError: %1$s\n\nPlease export logs from Settings → Feedback and report this issue.</string>
 
     <!-- Install preview dialog -->
     <string name="dialog_install_preview_title">Install HAP</string>

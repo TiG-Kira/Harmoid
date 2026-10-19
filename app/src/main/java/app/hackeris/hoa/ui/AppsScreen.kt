@@ -160,8 +160,13 @@ fun AppsScreen(
                 .nestedScroll(scrollBehavior.nestedScrollConnection),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
+            // 顶部留白必须取 [LocalTopBarClearance]（外层 Scaffold 里玻璃顶栏的实时高度），
+            // 不能用本页 Scaffold 的 padding.calculateTopPadding() —— 本页没有 topBar，
+            // 那个值恒为 0，内容就会直接顶到屏幕最上沿。
+            // 与 KiTerminal-UX 总览页同一套约定： clearance 只加在可滚动内容的
+            // contentPadding 上，不挂在页面根节点，顶栏收起时它会被一起滚走。
             contentPadding = PaddingValues(
-                top = topBarClearance(padding) + 8.dp,
+                top = LocalTopBarClearance.current + 8.dp,
                 bottom = navBarBottomPadding + 16.dp,
                 start = 16.dp,
                 end = 16.dp,

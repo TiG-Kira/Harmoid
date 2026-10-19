@@ -22,6 +22,11 @@ class HoaApplication : StageApplication() {
         LogWriter.e(TAG, "========== HOA Application onCreate START ==========")
         LogWriter.e(TAG, "Process: ${android.os.Process.myPid()}  Name: ${currentProcessName()}")
 
+        // 未捕获异常先落盘再交给系统：HAP 跑在独立 :hap 进程里，崩溃时 logcat 的
+        // crash buffer 经常被后续日志冲掉，而 LogWriter 写的是外部存储上的文件，
+        // 进程死了也还在。排查「进 HAP 闪退」这类问题就靠它。
+        installCrashLogger()
+
         // 机型模拟必须抢在任何会读 Build 的代码之前：
         // ArkUI-X 的 DeviceInfoPlugin 是 Java 类，字段读取发生在 Java 侧，
         // 这里覆盖 static 字段之后，JNI 侧读到的就是模拟值。
@@ -192,6 +197,36 @@ class HoaApplication : StageApplication() {
     private fun isHapProcess(): Boolean {
         val name = currentProcessName()
         return name.contains(":hap")
+    }
+
+    /**
+     * 把未捕获异常的完整堆栈写进 LogWriter，再链回系统原来的处理器。
+     *
+     * 为什么要自己接一层：`Thread.getDefaultUncaughtExceptionHandler()` 默认实现
+     * 只往 logcat 的 crash buffer 写，而 :hap 进程崩溃后 ArkUI-X 还会继续刷日志，
+     * 很容易把关键堆栈冲掉。这里先同步落盘（外部存储，进程消亡不影响），
+     * 再调原处理器，保证系统该有的「应用已停止」行为和进程终止都不变。
+     */
+    private fun installCrashLogger() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        val handler = Thread.UncaughtExceptionHandler { thread, throwable ->
+            LogWriter.e(
+                TAG,
+                "!!!!!!!! UNCAUGHT EXCEPTION in thread '${thread.name}' " +
+                    "(process=${currentProcessName()}) !!!!!!!!",
+                throwable,
+            )
+            // 链回系统原来的处理器（默认是 RuntimeInit 的 KillApplicationHandler），
+            // 保证「应用已停止」对话框和进程终止行为不变。
+            // 原处理器为 null 时自己收尾，否则进程会挂住不退出。
+            if (previous != null) {
+                previous.uncaughtException(thread, throwable)
+            } else {
+                android.os.Process.killProcess(android.os.Process.myPid())
+                kotlin.system.exitProcess(10)
+            }
+        }
+        Thread.setDefaultUncaughtExceptionHandler(handler)
     }
 
     /**

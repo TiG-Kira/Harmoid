@@ -705,6 +705,28 @@ top avoid = intersection(WindowView 窗口矩形, (0, 0, screenW, insets.top))
 
 ---
 
+### 33. 页面留白对齐 KiTerminal-UX 的玻璃顶栏约定（2026-10-19）
+
+**现象**：应用页 / 设置页的内容直接顶到屏幕最上沿，第一张卡片压在玻璃顶栏底下。
+
+**根因**：两页的 `contentPadding.top` 写的是 `topBarClearance(padding)`，即**本页自己那层 `Scaffold`** 的 `padding.calculateTopPadding()`。可这两页没有 `topBar`（顶栏由外层 `HoaMainScreen` 的 Scaffold 统一渲染），`contentWindowInsets` 又是 0，所以这个值恒为 **0**。
+
+**KiTerminal-UX 的约定**（`compose/GlassPageHost.kt`）：
+
+| 规则 | 说明 |
+|---|---|
+| `LocalTopBarClearance` | 唯一合法的顶部留白来源。由 `MainScreen` 从**外层** Scaffold 的 `padding.calculateTopPadding()` 提供，随顶栏收起实时变小 |
+| clearance 只加在可滚动内容的 `contentPadding` 上 | 不能挂在页面根节点：根 padding 是死带，顶栏收窄后会剩一条不透明的边 |
+| `contentWindowInsets = WindowInsets(0,0,0,0)` | 页面自己不吃系统 insets，避让全交给显式的 clearance |
+| `.padding(padding)` + `contentPadding(top = LocalTopBarClearance.current + 8.dp)` | 网格/列表页的标准写法 |
+| 独立页（不在 Tab 宿主里） | 用 `rememberGlassPageBackdrop()` 自建取景层 + `standaloneContentPadding(padding, top = …)`，因为拿不到宿主的 backdrop |
+
+**修法**：`AppsScreen` / `SettingsScreen` 的 `contentPadding.top` 改为 `LocalTopBarClearance.current (+ 8.dp / + 4.dp)`。与 KiTerminal 总览页、设置页逐行一致。
+
+**遗留**：`HapDetailActivity`（应用信息页）还是上游的 XML + `AppCompatActivity` 实现，没接入这套约定，也没用上 `Theme.HOA` 的 NoActionBar 主题（`setTitle()` 因此不显示）。需要按独立页约定重写成 Compose。
+
+---
+
 ## 构建与工具链
 
 ```bash
@@ -763,6 +785,30 @@ ARKUI_BUILD=<path-to-build> ./scripts/sync_arkui_x.sh
 | `stage_asset_provider.cpp` read file failed | 无 | 日志噪音，不影响渲染 |
 | `bundleInfo_ is nullptr` | 无 | HOA 未实现完整 Bundle Manager |
 | `__thread` / `_Thread_local` 变量不支持 | HAP C/C++ 代码中的线程局部变量 | ~~clone_bridge 剥离 CLONE_SETTLS~~ **已修正**：OHOS NDK (BiSheng) 和 Android NDK 均默认将 `__thread` 编译为 emutls（`__emutls_get_address`，编译器内置软件 TLS），不依赖 TPIDR_EL0，在主线程开箱即用。TestThreadLocal 已通过验证。musl 子线程的 native TLS（`-fno-emulated-tls` 编译的 TLSDESC）仍需后续干预 TLSDESC entry |
+
+---
+
+### 34. HAP 启动闪退的防御性改造（2026-10-19）
+
+**现象**：用户反馈安装 26.7.5.1 后「进 app 闪退」（主页可见，进入 HAP 崩）。
+
+**已排除的可能**：
+
+| 嫌疑 | 结论 |
+|---|---|
+| 自编 adapter jar 与 .so 版本错配 | **排除**。`.so` 走 `JNI_OnLoad → RegisterNatives` 动态注册（16083 个导出符号、6 处 RegisterNatives、JNI 方法名在 .rodata）；与上游 APK dex 逐一比对 `ohos.stage.ability.adapter.StageActivity` 成员，字段/方法完全一致 |
+| `BuildSpoofer` 覆盖 Build 静态字段 | 低风险。默认档案是「跟随宿主」，`apply()` 直接 return；且 Unsafe 失败会退反射、再失败只记日志 |
+| `ProcessSlotManager` / 启动 Intent | 未改动 |
+
+**最可能的原因**：本次为修状态栏避让引入的 edge-to-edge 改造（`setDecorFitsSystemWindows(false)` + content 零 padding + insets 透传 + 主题系统栏透明），在某些 OEM ROM 或系统版本上与 `StageActivity` 的窗口假设冲突。
+
+**防御措施（不依赖复现日志）**：
+
+1. **崩溃落盘**：`HoaApplication.installCrashLogger()` 把未捕获异常完整堆栈写进 LogWriter（外部存储，进程死了也在），再链回系统原处理器。设置 → 反馈 → 导出日志 即可拿到
+2. **自愈开关**：`HoaAbilityActivity` 维护 `hoa_hap_window.edge_to_edge_enabled`（默认 true）。启动路径任何异常（`super.onCreate` / `configureEdgeToEdgeForHap` / `setDecorFitsSystemWindows`）都会把它置 false，**下次启动自动退回上游旧行为**，app 恢复可用；同时日志里能反证是不是这段引起
+3. **运行时守卫**：`initSuccess == false` 时不再硬闯 `super.onCreate()`（native SEGV，Java catch 拦不住），改为弹出可见错误对话框 + finish
+
+**待真机验证**：导出日志看堆栈；若自愈开关被触发（日志有 `disableEdgeToEdgeNextLaunch`），则确认是 edge-to-edge 兼容问题，需要按 OEM 做条件降级。
 
 ---
 
