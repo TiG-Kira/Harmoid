@@ -86,6 +86,8 @@ Harmoid 基于 ArkUI-X 的 Android 构建体系，通过多个仓库的定向适
 | **设置** | 机型模拟、默认排序、应用权限、HDC 服务、外观、检查更新、反馈 |
 
 原先挂在 `MainActivity` 选项菜单里的设置项已全部迁到设置页，菜单本身不再保留。
+关于页是**独立 Activity**（`AboutActivity`，与 KiTerminal-UX 的实现对齐）：
+设置 → **版本信息** 打开，自管边到边与返回栈。
 
 - API 33+ 使用浮动玻璃底栏（AGSL 运行时着色器）；API 30~32 自动回退到 Miuix 经典 `NavigationBar`。
 - 玻璃材质相关代码以 vendor 方式放在 `app/src/main/java/top/yukonga/` 下，与上游组件库解耦，便于逐文件同步。
@@ -94,7 +96,7 @@ Harmoid 基于 ArkUI-X 的 Android 构建体系，通过多个仓库的定向适
 
 Harmoid 允许把"上报给 HAP 的设备信息"改成任意机型，设置页 → **模拟机型** 提供一批华为 / 鸿蒙预设，也可以 **自定义机型** 手动填写字段，或选 **跟随宿主设备** 用真机信息。
 
-实现在 `app/src/main/java/app/hackeris/hoa/device/`：
+实现在 `app/src/main/java/com/kira/harmoid/device/`：
 
 - `DeviceProfile` — 机型档案（brand / manufacturer / model / product / device / board / hardware / fingerprint / osVersion）
 - `DeviceProfileStore` — 持久化到 `hoa_device_profile` SharedPreferences

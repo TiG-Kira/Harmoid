@@ -353,7 +353,7 @@ OHOS HAP .so 调用 `sigaction()` 时，musl 和 bionic 的 `struct sigaction` �
 
 实现 OHOS HDC (HarmonyOS Device Connector) 协议 daemon，使 HOA 作为一台 OpenHarmony 设备被 DevEco Studio 识别并支持完整的安装和部署流程。
 
-**协议实现**（`app/src/main/java/app/hackeris/hoa/hdc/`，7 个文件）：
+**协议实现**（`app/src/main/java/com/kira/harmoid/hdc/`，7 个文件）：
 
 | 文件 | 职责 |
 |------|------|
@@ -671,7 +671,7 @@ top avoid = intersection(WindowView 窗口矩形, (0, 0, screenW, insets.top))
 
 **动机**：HAP 通过 `@ohos.deviceInfo` 读到的永远是真实 Android 机型，部分 HAP 会按机型走不同分支（平板布局、折叠屏、HarmonyOS 专属能力探测）。
 
-**实现**（`app/src/main/java/app/hackeris/hoa/device/`）：
+**实现**（`app/src/main/java/com/kira/harmoid/device/`）：
 
 | 文件 | 职责 |
 |------|------|
