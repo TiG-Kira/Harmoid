@@ -4,6 +4,10 @@
 
 **HOA 是一个正在开发中的实验性项目**，目标是让 HarmonyOS 的 HAP 应用包无需修改即可在 Android 设备上运行。目前已完成核心运行时搭建，ArkTS 页面渲染和原生 .so 加载均已验证通过，但大量系统 API 尚未实现，兼容性有限。
 
+> **下载**：[`Releases`](https://github.com/TiG-Kira/Harmoid/releases) 提供签名后的 APK（arm64-v8a）。
+> 由 `release_apk.yml` 自动构建，keystore 与 KiTerminal-UX 同款（`CN=KiraStudio`）。
+> 每次 Release 的 CI 运行都会跑一遍 `apksigner verify --print-certs`，日志里能看到证书 SHA-256。
+
 ## 支持到什么程度
 
 | 能力 | 状态 | 说明 |
