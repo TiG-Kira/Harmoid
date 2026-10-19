@@ -81,6 +81,24 @@
         android:usesCleartextTraffic="true"
         tools:targetApi="31">
 
+        <!--
+          禁用 profileinstaller 的启动初始化。
+          原因（26.10.19.2 实测）：debug 变体上 ProfileInstaller 后台写 profile 时
+          NoClassDefFoundError: androidx.concurrent.futures.AbstractResolvableFuture
+          （类定义在 classes13.dex 里但 ART 加载不到，14 个 dex 的合并边界问题；
+          release 变体无 baseline profile 会直接跳过所以没暴露）。
+          未捕获异常把整个进程杀光 → 开 app 闪退。基线 profile 对功能零意义，直接禁。
+        -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            android:authorities="${applicationId}.androidx-startup"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
+                tools:node="remove" />
+        </provider>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.logprovider"

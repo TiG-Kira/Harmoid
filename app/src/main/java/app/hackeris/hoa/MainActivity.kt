@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -39,6 +40,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.navigationevent.compose.LocalNavigationEventDispatcherOwner
+import app.hackeris.hoa.compose.NavigationHelper
 import app.hackeris.hoa.hap.ModuleConfig
 import app.hackeris.hoa.logging.LogWriter
 import app.hackeris.hoa.ui.HoaMainScreen
@@ -91,11 +94,20 @@ class MainActivity : ComponentActivity() {
         )
 
         setContent {
-            HoaTheme {
-                HoaRoot(
-                    initialUri = pendingUri,
-                    onRefreshHandlerReady = { currentRefresh = it },
-                )
+            // KiTerminal-UX 约定：根 composition 必须提供 LocalNavigationEventDispatcherOwner，
+            // 否则 Miuix WindowDialog（首次启动免责声明、安装预览等）内部的
+            // NavigationBackHandler 会抛 IllegalStateException 直接闪退。
+            val navDispatcher = remember { NavigationHelper.createDispatcher() }
+            val navDispatcherOwner = remember { NavigationHelper.createOwner(navDispatcher) }
+            CompositionLocalProvider(
+                LocalNavigationEventDispatcherOwner provides navDispatcherOwner
+            ) {
+                HoaTheme {
+                    HoaRoot(
+                        initialUri = pendingUri,
+                        onRefreshHandlerReady = { currentRefresh = it },
+                    )
+                }
             }
         }
     }
