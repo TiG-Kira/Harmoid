@@ -106,8 +106,9 @@ log "  → jniLibs: $SO_COUNT 个 .so"
 # 这几个 .so 由本仓库 app/CMakeLists.txt 自己编（stub / bridge），
 # APK 里也有一份同名文件，留着会和 CMake 产物撞成
 # DuplicateRelativeFileException（mergeDebugNativeLibs 直接失败）。
+# libc++_shared.so 是 NDK 的 STL 共享库，CMake 也会往产物目录塞一份。
 for dup in libace_napi.z.so libhilog_ndk.z.so libohaudio.so \
-           librawfile.z.so libbundle_ndk.z.so; do
+           librawfile.z.so libbundle_ndk.z.so libc++_shared.so; do
     if [ -f "$JNI_DIR/$dup" ]; then
         rm -f "$JNI_DIR/$dup"
         log "  → 剔除 $dup（由 CMake 构建）"
