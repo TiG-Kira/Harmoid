@@ -13,6 +13,12 @@ inputs:
     description: Release asset name holding the prebuilt bundle
     required: false
     default: arkui-x-prebuilts-arm64.zip
+  prebuilt-url:
+    description: >-
+      Direct download URL for the prebuilt bundle. Pass vars.HOA_PREBUILT_URL
+      from the workflow — composite action 里不能直接用 vars 上下文。
+    required: false
+    default: ''
 
 runs:
   using: composite
@@ -33,7 +39,7 @@ runs:
       env:
         GH_TOKEN: ${{ inputs.token }}
         ASSET: ${{ inputs.prebuilt-asset }}
-        PREBUILT_URL: ${{ vars.HOA_PREBUILT_URL }}
+        PREBUILT_URL: ${{ inputs.prebuilt-url }}
       run: |
         set -uo pipefail
         mkdir -p .prebuilt

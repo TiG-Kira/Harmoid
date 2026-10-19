@@ -49,6 +49,7 @@ jobs:
         uses: ./.github/actions/prepare-arkui-x
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          prebuilt-url: ${{ vars.HOA_PREBUILT_URL }}
 
       - name: 编译 Debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
@@ -83,6 +84,7 @@ jobs:
         uses: ./.github/actions/prepare-arkui-x
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          prebuilt-url: ${{ vars.HOA_PREBUILT_URL }}
 
       - name: 解码签名私钥（与 KiTerminal-UX 同款 JKS）
         env:
