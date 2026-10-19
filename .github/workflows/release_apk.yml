@@ -12,6 +12,8 @@ on:
         required: true
         type: string
 
+# 产物包专用的 Release（prebuilts-*）不是发版，别给它打 APK。
+# 预检作业直接跳过，后面的 build / publish 因 needs 不满足也不会跑。
 concurrency:
   group: release-apk-${{ github.event.release.tag_name || inputs.tag }}
   cancel-in-progress: false
@@ -22,6 +24,7 @@ permissions:
 jobs:
   # ── 1. 预检：Release 里是否已经有 APK ─────────────────────────────
   preflight:
+    if: ${{ !startsWith(github.event.release.tag_name || inputs.tag, 'prebuilts') }}
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.check.outputs.tag }}
