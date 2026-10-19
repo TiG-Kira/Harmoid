@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- 关于页窗口底色（深色）：与页面自身渐变起始色一致，避免冷启动闪屏 -->
+    <color name="about_window_bg">#FF1C1B1F</color>
+</resources>

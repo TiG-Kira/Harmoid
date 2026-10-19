@@ -1,6 +1,6 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
     <!-- Base application theme. -->
-    <style name="Theme.HOA" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="Theme.Harmoid" parent="Theme.MaterialComponents.DayNight.NoActionBar">
         <!-- Primary brand color. -->
         <item name="colorPrimary">@color/purple_500</item>
         <item name="colorPrimaryVariant">@color/purple_700</item>
@@ -16,4 +16,11 @@
         <!-- 刘海 / 挖孔区域也允许内容铺开，交给 HAP 自行避让 -->
         <item name="android:windowLayoutInDisplayCutoutMode" tools:targetApi="27">shortEdges</item>
     </style>
+
+    <!-- 关于页独立 Activity：窗口背景直接给底色，避免启动瞬间闪白/闪黑 -->
+    <style name="Theme.Harmoid.About" parent="Theme.Harmoid">
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="android:windowBackground">@color/about_window_bg</item>
+    </style>
+
 </resources>

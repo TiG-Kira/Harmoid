@@ -7,4 +7,6 @@
     <color name="teal_700">#FF018786</color>
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
+    <!-- 关于页窗口底色：与页面自身渐变起始色一致，避免冷启动闪屏 -->
+    <color name="about_window_bg">#FFF7F7F7</color>
 </resources>

@@ -103,7 +103,6 @@ fun SettingsScreen(
     var showSortDialog by remember { mutableStateOf(false) }
     var showPortDialog by remember { mutableStateOf(false) }
     var showFeedbackDialog by remember { mutableStateOf(false) }
-    var showAboutPage by remember { mutableStateOf(false) }
     var showPermissionsDialog by remember { mutableStateOf(false) }
     var updateMessage by remember { mutableStateOf<String?>(null) }
     var updateHasNewVersion by remember { mutableStateOf(false) }
@@ -292,7 +291,13 @@ fun SettingsScreen(
                             title = stringResource(R.string.settings_about),
                             description = stringResource(R.string.settings_version_fmt, BuildConfig.VERSION_NAME),
                             icon = Icons.Rounded.Info,
-                            action = { showAboutPage = true },
+                            action = {
+                                // 关于页是独立 Activity（与 KiTerminal-UX 一致），
+                                // 这里只负责把它拉起来。
+                                context.startActivity(
+                                    Intent(context, com.kira.harmoid.AboutActivity::class.java)
+                                )
+                            },
                         ),
                     )
                 )
@@ -532,11 +537,6 @@ fun SettingsScreen(
                 }
             }
         )
-    }
-
-    // 关于页：全页覆盖在设置页之上（自带呼吸渐变背景 + 玻璃顶栏 + 返回）
-    if (showAboutPage) {
-        AboutScreen(onBack = { showAboutPage = false })
     }
 }
 

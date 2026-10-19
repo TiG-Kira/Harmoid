@@ -85,7 +85,7 @@
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.HOA"
+        android:theme="@style/Theme.Harmoid"
         android:extractNativeLibs="true"
         android:usesCleartextTraffic="true"
         tools:targetApi="31">
@@ -168,6 +168,14 @@
             android:exported="false"
             android:parentActivityName=".MainActivity"
             android:label="@string/dialog_app_info_title" />
+
+        <!-- 关于页：独立 Activity（与 KiTerminal-UX 的 AboutActivity 对齐） -->
+        <activity
+            android:name=".AboutActivity"
+            android:exported="false"
+            android:parentActivityName=".MainActivity"
+            android:theme="@style/Theme.Harmoid.About"
+            android:label="@string/about_preference_title" />
 
         <activity
             android:name=".HoaShortcutActivity"
