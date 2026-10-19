@@ -32,7 +32,18 @@ open class HoaAbilityActivity : StageActivity() {
             Log.e(TAG, "StageApplication init FAILED — ArkUI rendering will not work")
             Log.e(TAG, "  Error was: ${app.initError?.message}")
             // 运行时没起来时继续走 super.onCreate() 只会在 native 里炸成
-            // SEGFAULT（Java catch 拦不住）。这里直接给出可见的错误并退栈。
+            // SEGFAULT（Java catch 拦不住）。这里给出可见的错误并退栈。
+            //
+            // 但 super.onCreate() 必须被调用过一次：Android 15+ 把 mCalled 的
+            // 设置放进了 Activity 基类 onCreate，直接 return 会触发
+            // SuperNotCalledException 次生崩溃（对话框还没显示进程就死了，
+            // 26.10.19.2 AVD 实测）。基类 onCreate 是空实现风险低，仍然兜异常。
+            try {
+                super.onCreate(savedInstanceState)
+                Log.e(TAG, "super.onCreate() called in guard path (mCalled satisfied)")
+            } catch (e: Throwable) {
+                Log.e(TAG, "super.onCreate() in guard path failed", e)
+            }
             android.app.AlertDialog.Builder(this)
                 .setTitle(R.string.dialog_init_failed_title)
                 .setMessage(getString(R.string.dialog_init_failed_msg, app.initError?.message ?: "unknown"))
@@ -48,6 +59,12 @@ open class HoaAbilityActivity : StageActivity() {
         if (!moduleExists(bundleName, moduleName)) {
             Log.e(TAG, "Module not found: bundleName=$bundleName, moduleName=$moduleName")
             Log.e(TAG, "  Checked: filesDir/hap/$bundleName.$moduleName/")
+            // 同守卫路径：先满足 Activity 契约再退栈，避免 SuperNotCalledException。
+            try {
+                super.onCreate(savedInstanceState)
+            } catch (e: Throwable) {
+                Log.e(TAG, "super.onCreate() in module-missing path failed", e)
+            }
             android.widget.Toast.makeText(this, getString(R.string.toast_module_not_found, bundleName, moduleName), android.widget.Toast.LENGTH_LONG).show()
             finish()
             return

@@ -11,7 +11,8 @@
 #   1. 浅克隆 harmony-on-android/arkui_for_android 的三个 Java 模块
 #        capability/java、entrance/java、stage/ability/java
 #   2. 打两处 API 兼容补丁（compileSdk 33+ 才能编译，见下方 PATCHES）
-#   3. javac 到临时目录，打成 jar，丢进 app/libs/
+#   3. 下载 fragment 依赖链（StageFragment* 要被 .so 的 JNI FindClass，必须编入）
+#   4. javac 到临时目录，打成 jar，丢进 app/libs/
 #
 # PATCHES（都是框架 API 变更导致的编译问题，不改变行为）：
 #   - AceWeb: WebSettings.setAppCacheEnabled/setAppCachePath 自 API 33 移除
@@ -127,33 +128,55 @@ io.open(p, "w", encoding="utf-8", newline="\n").write(s)
 PY
 
 # ---------- 3. 依赖 ----------
-# 源码只依赖三个 androidx 包（其余全是 Android framework）。
+# 源码只依赖少量 androidx 包（其余全是 Android framework）。
+# fragment 链是 26.10.19.2 补上的：StageFragment/StageFragmentDelegate 被 libarkui_android.so
+# 的 JNI FindClass 直接加载（"Didn't find class StageFragmentDelegate" → StageApplication
+# init 失败 → HAP 起不来）。当初为省依赖链排除 StageFragment* 是错的，必须编进 jar。
 log "下载 androidx 依赖"
 DEPS="$WORK/deps"; mkdir -p "$DEPS"
 GOOGLE_MAVEN="https://dl.google.com/dl/android/maven2"
+# 格式: group/artifact/version/file   （.aar 解 classes.jar，.jar 直接用）
 for a in \
     "androidx/core/core/1.19.0/core-1.19.0.aar" \
     "androidx/window/window/1.5.0/window-1.5.0.aar" \
-    "androidx/window/window-java/1.5.0/window-java-1.5.0.aar"
+    "androidx/window/window-java/1.5.0/window-java-1.5.0.aar" \
+    "androidx/fragment/fragment/1.5.4/fragment-1.5.4.aar" \
+    "androidx/activity/activity/1.9.3/activity-1.9.3.aar" \
+    "androidx/lifecycle/lifecycle-common/2.6.2/lifecycle-common-2.6.2.jar" \
+    "androidx/lifecycle/lifecycle-runtime/2.6.2/lifecycle-runtime-2.6.2.aar" \
+    "androidx/lifecycle/lifecycle-viewmodel/2.6.2/lifecycle-viewmodel-2.6.2.aar" \
+    "androidx/savedstate/savedstate/1.2.1/savedstate-1.2.1.aar" \
+    "androidx/annotation/annotation-jvm/1.8.1/annotation-jvm-1.8.1.jar" \
+    "androidx/collection/collection/1.1.0/collection-1.1.0.jar"
 do
     name="$(basename "$a")"
     curl -fsSL -o "$DEPS/$name" "$GOOGLE_MAVEN/$a" || die "下载失败: $a"
-    d="${DEPS}/${name%.aar}"; mkdir -p "$d"
-    (cd "$d" && unzip -q -o "$DEPS/$name" classes.jar)
+    case "$name" in
+        *.aar)
+            d="${DEPS}/${name%.aar}"; mkdir -p "$d"
+            # 个别 aar（如 KMP 化的 lifecycle-viewmodel 2.9.x）没有 classes.jar，
+            # unzip 返回非零不能让 set -e 把脚本带崩。
+            (cd "$d" && unzip -q -o "$DEPS/$name" classes.jar 2>/dev/null || true)
+            [ -f "$d/classes.jar" ] || log "  WARN: $name 无 classes.jar（KMP 包？）"
+            ;;
+    esac
 done
 
 # ---------- 4. 编译 ----------
-# 注意：StageFragment* 依赖 androidx.fragment，而 HOA 用不到 Fragment 入口，
-# 排除它们可以省掉一整条 fragment/activity/lifecycle 依赖链。
-log "javac 编译（排除 StageFragment*）"
+# StageFragment* 必须编入：libarkui_android.so 的 JNI 会 FindClass 它们，
+# 缺类 → StageApplication init 失败 → HAP Activity 起不来（26.10.19.2 实测）。
+log "javac 编译（含 StageFragment*）"
 find capability/java/src entrance/java/src stage/ability/java/src -name '*.java' \
-    | grep -v 'StageFragment' > "$WORK/srcs.txt"
+    > "$WORK/srcs.txt"
 
 CLASSES="$WORK/classes"; mkdir -p "$CLASSES"
 to_win() { if command -v cygpath >/dev/null 2>&1; then cygpath -w "$1"; else echo "$1"; fi; }
 
 CP="$(to_win "$ANDROID_JAR")"
-for j in "$DEPS"/*/classes.jar; do CP="$CP;$(to_win "$j")"; done
+for j in "$DEPS"/*/classes.jar "$DEPS"/*.jar; do
+    [ -f "$j" ] || continue
+    CP="$CP;$(to_win "$j")"
+done
 
 javac -nowarn -source 17 -target 17 -encoding UTF-8 \
       -cp "$CP" -d "$(to_win "$CLASSES")" "@$(to_win "$WORK/srcs.txt")" \

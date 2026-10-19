@@ -31,7 +31,9 @@ runs:
           app/src/main/jniLibs
           app/libs
           app/src/main/assets/sys
-        key: arkui-x-prebuilts-${{ hashFiles('scripts/sync_arkui_x.sh', 'scripts/pack_prebuilts.sh', 'manifests/hoa-weekly.xml') }}
+        key: arkui-x-prebuilts-${{ hashFiles('scripts/sync_arkui_x.sh', 'scripts/pack_prebuilts.sh', 'scripts/build_adapter_jar.sh', 'manifests/hoa-weekly.xml') }}
+        restore-keys: |
+          arkui-x-prebuilts-
 
     - name: 缓存未命中时获取预编译产物
       if: steps.cache.outputs.cache-hit != 'true'
@@ -117,4 +119,6 @@ runs:
           app/src/main/jniLibs
           app/libs
           app/src/main/assets/sys
-        key: arkui-x-prebuilts-${{ hashFiles('scripts/sync_arkui_x.sh', 'scripts/pack_prebuilts.sh', 'manifests/hoa-weekly.xml') }}
+        key: arkui-x-prebuilts-${{ hashFiles('scripts/sync_arkui_x.sh', 'scripts/pack_prebuilts.sh', 'scripts/build_adapter_jar.sh', 'manifests/hoa-weekly.xml') }}
+        restore-keys: |
+          arkui-x-prebuilts-
