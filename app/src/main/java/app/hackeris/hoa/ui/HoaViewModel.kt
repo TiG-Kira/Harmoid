@@ -1,0 +1,226 @@
+package app.hackeris.hoa.ui
+
+import android.app.Application
+import android.content.Intent
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
+import android.graphics.Bitmap
+import android.graphics.drawable.Icon
+import android.net.Uri
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import app.hackeris.hoa.HoaShortcutActivity
+import app.hackeris.hoa.ProcessSlotManager
+import app.hackeris.hoa.hap.HapBundleLoader
+import app.hackeris.hoa.hap.HapInstaller
+import app.hackeris.hoa.hap.HapParseException
+import app.hackeris.hoa.hap.InstalledHap
+import app.hackeris.hoa.hap.ModuleConfig
+import app.hackeris.hoa.logging.LogWriter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+
+/** 应用页需要的一条 HAP 记录（含已解析的展示名与图标）。 */
+data class HapItem(
+    val hap: InstalledHap,
+    val label: String,
+    val icon: Bitmap?,
+    val installedAt: Long,
+)
+
+/** 安装前的确认信息。 */
+data class InstallPreview(
+    val file: File,
+    val config: ModuleConfig,
+)
+
+enum class SortMode { NAME, TIME_DESC, TIME_ASC }
+
+/** 排序方式在设置页 / 应用页共用的展示文案。 */
+internal fun SortMode.labelRes(): Int = when (this) {
+    SortMode.NAME -> app.hackeris.hoa.R.string.sort_name
+    SortMode.TIME_DESC -> app.hackeris.hoa.R.string.sort_time_desc
+    SortMode.TIME_ASC -> app.hackeris.hoa.R.string.sort_time_asc
+}
+
+internal fun SortMode.summaryRes(): Int = when (this) {
+    SortMode.NAME -> app.hackeris.hoa.R.string.sort_name_summary
+    SortMode.TIME_DESC -> app.hackeris.hoa.R.string.sort_time_desc_summary
+    SortMode.TIME_ASC -> app.hackeris.hoa.R.string.sort_time_asc_summary
+}
+
+/**
+ * 主页的全部状态与动作。
+ *
+ * 之所以从 Activity 里抽出来：新的 UI 是 Compose 的，页面重组会频繁发生，
+ * 安装 / 卸载 / 图标解码这些耗时活儿必须活在 Activity 生命周期之外，
+ * 且不能阻塞主线程。
+ */
+class HoaViewModel(app: Application) : AndroidViewModel(app) {
+
+    private val installer = HapInstaller(app)
+
+    private val _items = MutableStateFlow<List<HapItem>>(emptyList())
+    val items: StateFlow<List<HapItem>> = _items.asStateFlow()
+
+    private val _busy = MutableStateFlow(false)
+    val busy: StateFlow<Boolean> = _busy.asStateFlow()
+
+    private val _preview = MutableStateFlow<InstallPreview?>(null)
+    val preview: StateFlow<InstallPreview?> = _preview.asStateFlow()
+
+    private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val events = _events.asSharedFlow()
+
+    /** 名称 → 图标缓存，避免每次重组重新解 resources.index。 */
+    private val iconCache = mutableMapOf<String, Bitmap?>()
+
+    fun refresh() {
+        viewModelScope.launch {
+            val loaded = withContext(Dispatchers.IO) {
+                installer.getInstalledHaps().map { hap ->
+                    val key = "${hap.bundleName}.${hap.moduleName}"
+                    val label = HapBundleLoader.resolveLabel(hap.contentDir, hap.moduleConfig)
+                    val icon = if (iconCache.containsKey(key)) {
+                        iconCache[key]
+                    } else {
+                        HapBundleLoader.loadHapIcon(hap.contentDir, hap.moduleConfig)
+                            .also { iconCache[key] = it }
+                    }
+                    HapItem(
+                        hap = hap,
+                        label = label,
+                        icon = icon,
+                        installedAt = hap.contentDir.lastModified(),
+                    )
+                }
+            }
+            _items.value = loaded
+        }
+    }
+
+    /** 用户选完 HAP 文件后：先解出 module.json 做确认，不直接安装。 */
+    fun previewFromUri(uri: Uri) {
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                val preview = withContext(Dispatchers.IO) {
+                    val tmpFile = File(
+                        getApplication<Application>().cacheDir,
+                        "hap_preview_${System.currentTimeMillis()}"
+                    )
+                    getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
+                        tmpFile.outputStream().use { out -> input.copyTo(out) }
+                    } ?: throw IllegalStateException("Cannot open selected file")
+
+                    var hapPath: String
+                    var config: ModuleConfig
+                    try {
+                        config = HapBundleLoader().previewConfig(tmpFile.absolutePath)
+                        hapPath = tmpFile.absolutePath
+                    } catch (e: HapParseException) {
+                        if (!HapBundleLoader().isAppPackage(tmpFile.absolutePath)) throw e
+                        hapPath = HapBundleLoader().unwrapSingleHap(tmpFile.absolutePath)
+                        tmpFile.delete()
+                        config = HapBundleLoader().previewConfig(hapPath)
+                    }
+                    InstallPreview(File(hapPath), config)
+                }
+                _preview.value = preview
+            } catch (e: Exception) {
+                LogWriter.e(TAG, "HAP preview failed", e)
+                _events.tryEmit("安装包解析失败：${e.message}")
+            } finally {
+                _busy.value = false
+            }
+        }
+    }
+
+    fun confirmInstall() {
+        val pending = _preview.value ?: return
+        _preview.value = null
+        viewModelScope.launch {
+            _busy.value = true
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    installer.install(pending.file.absolutePath)
+                }
+                _events.tryEmit("已安装 ${result.bundleName}")
+                refresh()
+            } catch (e: Exception) {
+                LogWriter.e(TAG, "HAP install failed", e)
+                _events.tryEmit("安装失败：${e.message}")
+            } finally {
+                pending.file.delete()
+                _busy.value = false
+            }
+        }
+    }
+
+    fun dismissPreview() {
+        _preview.value?.file?.delete()
+        _preview.value = null
+    }
+
+    fun uninstall(hap: InstalledHap) {
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) { installer.uninstall(hap.bundleName) }
+            _events.tryEmit("已卸载 ${hap.bundleName}")
+            refresh()
+        }
+    }
+
+    /** @return 是否成功分配到进程槽。 */
+    fun launch(hap: InstalledHap): Boolean {
+        val slot = ProcessSlotManager.launchHap(
+            getApplication(), hap.bundleName, hap.moduleName, hap.mainAbility
+        )
+        if (slot < 0) {
+            _events.tryEmit("进程槽已满（最多 ${ProcessSlotManager.MAX_SLOTS} 个），请先关闭一个正在运行的 HAP")
+            return false
+        }
+        return true
+    }
+
+    fun pinShortcut(item: HapItem) {
+        viewModelScope.launch {
+            val hap = item.hap
+            val context = getApplication<Application>()
+            val shortcutId = "${hap.bundleName}.${hap.moduleName}.${hap.mainAbility}"
+            val intent = Intent(context, HoaShortcutActivity::class.java).apply {
+                putExtra("BUNDLE_NAME", hap.bundleName)
+                putExtra("MODULE_NAME", hap.moduleName)
+                putExtra("ABILITY_NAME", hap.mainAbility)
+                action = Intent.ACTION_VIEW
+            }
+            val builder = ShortcutInfo.Builder(context, shortcutId)
+                .setShortLabel(item.label)
+                .setLongLabel(item.label)
+                .setIntent(intent)
+            item.icon?.let { builder.setIcon(Icon.createWithBitmap(it)) }
+
+            val manager = context.getSystemService(ShortcutManager::class.java)
+            if (manager != null && manager.isRequestPinShortcutSupported) {
+                // requestPinShortcut 要求先有动态快捷方式；系统会把数据序列化进
+                // 固定确认框，之后立即移除即可保持长按菜单干净。
+                manager.addDynamicShortcuts(listOf(builder.build()))
+                manager.requestPinShortcut(builder.build(), null)
+                manager.removeDynamicShortcuts(listOf(shortcutId))
+                _events.tryEmit("已请求添加「${item.label}」到桌面")
+            } else {
+                _events.tryEmit("当前桌面不支持固定快捷方式")
+            }
+        }
+    }
+
+    companion object {
+        private const val TAG = "HOA.Main"
+    }
+}

@@ -112,4 +112,64 @@
     <string name="dialog_hdc_port_msg">输入 HDC 守护进程的 TCP 端口 (1024–65535)</string>
     <string name="toast_hdc_invalid_port">无效的端口号 (1024–65535)</string>
     <string name="err_not_hap_file">请选择 .hap 或 .app 文件</string>
+
+    <!-- ===== 新版两页 UI（应用 / 设置）===== -->
+    <string name="tab_apps">应用</string>
+    <string name="tab_settings">设置</string>
+    <string name="action_search">搜索</string>
+    <string name="action_sort">排序</string>
+    <string name="ok">好</string>
+    <string name="save">保存</string>
+    <string name="cancel">取消</string>
+
+    <string name="hint_install_supports">支持 .hap 与 .app 安装包</string>
+    <string name="hint_no_haps_title">还没有应用</string>
+    <string name="hint_no_search_results_title">没有找到匹配项</string>
+    <string name="btn_add_to_home_summary">在桌面创建这个 HAP 的快捷方式</string>
+    <string name="sort_dialog_summary">仅影响应用列表的排列</string>
+    <string name="sort_name">按名称</string>
+    <string name="sort_name_summary">按显示名 A → Z 排列</string>
+    <string name="sort_time_desc">最新在前</string>
+    <string name="sort_time_desc_summary">最近安装的排在最上面</string>
+    <string name="sort_time_asc">最早在前</string>
+    <string name="sort_time_asc_summary">最早安装的排在最上面</string>
+
+    <string name="settings_section_device">设备模拟</string>
+    <string name="settings_section_app">应用</string>
+    <string name="settings_section_connect">连接</string>
+    <string name="settings_section_appearance">外观</string>
+    <string name="settings_section_about">关于</string>
+    <string name="settings_footer">HOA 让鸿蒙 HAP 跑在 Android 上。机型模拟只改变 HAP 看到的设备身份，不影响真实硬件。</string>
+
+    <string name="settings_device_model">模拟机型</string>
+    <string name="settings_device_model_summary">选择 HAP 通过 @ohos.deviceInfo 看到的机型</string>
+    <string name="settings_device_custom">自定义机型…</string>
+    <string name="settings_device_custom_summary">编辑品牌、机型、主板与系统版本</string>
+    <string name="settings_device_restore">跟随宿主设备</string>
+    <string name="settings_device_restore_summary">停止模拟，如实上报 Android 真机信息</string>
+    <string name="settings_device_restored">已恢复宿主设备身份</string>
+    <string name="settings_device_applied">已切换模拟机型：%1$s</string>
+    <string name="settings_device_follow_host">如实上报 Android 真机信息</string>
+    <string name="settings_device_editor_summary">这些值会上报给运行中的 HAP，改完需重启 HAP 生效。</string>
+    <string name="field_display_name">显示名称</string>
+    <string name="field_os_version">鸿蒙版本</string>
+
+    <string name="settings_default_sort">默认排序</string>
+    <string name="settings_permissions">应用权限</string>
+    <string name="settings_permissions_summary">授予存储 / 通知等运行时权限</string>
+    <string name="settings_hdc">HDC 调试服务</string>
+    <string name="settings_hdc_running_fmt">正在运行，端口 %1$d</string>
+    <string name="settings_hdc_stopped">已停止</string>
+    <string name="settings_hdc_port">HDC 端口</string>
+    <string name="settings_material_you">Material You 动态取色</string>
+    <string name="settings_material_you_summary">跟随系统壁纸配色（Android 12+）</string>
+    <string name="settings_check_update">检查更新</string>
+    <string name="settings_check_update_summary">查找是否有更新的 HOA 版本</string>
+    <string name="settings_feedback">问题反馈</string>
+    <string name="settings_feedback_summary">导出日志或提交 Issue</string>
+    <string name="settings_about">版本信息</string>
+    <string name="settings_version_fmt">HOA %1$s</string>
+    <string name="settings_about_summary">HOA %1$s（构建 %2$d）\n\n在 Android 上运行鸿蒙 HAP 应用。\n\n实验性项目，遇到问题请反馈。</string>
+    <string name="dialog_feedback_export_logs_summary">打包运行日志，便于分享给开发者</string>
+    <string name="update_error_fmt">检查失败：%1$s</string>
 </resources>

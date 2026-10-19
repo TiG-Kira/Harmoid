@@ -1,0 +1,91 @@
+name: prepare-arkui-x
+description: >-
+  Restore the ArkUI-X build artifacts (jniLibs + adapter JARs) that the APK
+  needs. HOA itself is only the Android shell — the ArkUI-X runtime comes from
+  a ~100 GB source build, so CI restores it from cache or from a release asset
+  instead of rebuilding it.
+
+inputs:
+  token:
+    description: Token used to read release assets
+    required: true
+  prebuilt-asset:
+    description: Release asset name holding the prebuilt bundle
+    required: false
+    default: arkui-x-prebuilts-arm64.zip
+
+runs:
+  using: composite
+  steps:
+    - name: 尝试从缓存恢复 ArkUI-X 产物
+      id: cache
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          app/src/main/jniLibs
+          app/libs
+          app/src/main/assets/sys
+        key: arkui-x-prebuilts-${{ hashFiles('scripts/sync_arkui_x.sh', 'manifests/hoa-weekly.xml') }}
+
+    - name: 缓存未命中时从 Release 资产下载
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+        asset="${{ inputs.prebuilt-asset }}"
+        mkdir -p .prebuilt
+        # 依次尝试：最新 release / 指定 tag（workflow 可传）
+        if ! gh release download --repo "$GITHUB_REPOSITORY" --pattern "$asset" --dir .prebuilt --clobber 2>/dev/null; then
+          echo "::warning::Release 中没有 $asset，尝试从仓库变量 HOA_PREBUILT_URL 指定的地址下载"
+          url="${{ vars.HOA_PREBUILT_URL }}"
+          if [ -n "$url" ]; then
+            curl -fL --retry 3 -o ".prebuilt/$asset" "$url"
+          fi
+        fi
+        if [ -f ".prebuilt/$asset" ]; then
+          unzip -q -o ".prebuilt/$asset" -d .
+        fi
+
+    - name: 校验产物是否齐全
+      shell: bash
+      run: |
+        set -euo pipefail
+        missing=0
+        for f in \
+          "app/src/main/jniLibs/arm64-v8a/libarkui_android.so" \
+          "app/libs/arkui_android_adapter.jar" \
+          "app/src/main/assets/sys/systemres"
+        do
+          if [ ! -e "$f" ]; then
+            echo "::error file=$f::缺少 ArkUI-X 产物：$f"
+            missing=1
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          cat <<'MSG'
+        ------------------------------------------------------------------
+        ArkUI-X 预编译产物缺失，无法打出可运行的 APK。
+
+        获取方式（二选一）：
+          1. 本地跑 ./scripts/build_all.sh 完整构建一次，然后把
+             app/src/main/jniLibs、app/libs、app/src/main/assets/sys
+             打包成 arkui-x-prebuilts-arm64.zip，上传到本仓库的 Release；
+          2. 在仓库 Variables 里设置 HOA_PREBUILT_URL 指向该 zip 的地址。
+
+        产物齐全后本 workflow 会自动命中缓存，后续构建只需几分钟。
+        ------------------------------------------------------------------
+        MSG
+          exit 1
+        fi
+
+    - name: 回写缓存
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          app/src/main/jniLibs
+          app/libs
+          app/src/main/assets/sys
+        key: arkui-x-prebuilts-${{ hashFiles('scripts/sync_arkui_x.sh', 'manifests/hoa-weekly.xml') }}

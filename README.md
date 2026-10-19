@@ -68,6 +68,50 @@ HOA 基于 ArkUI-X 的 Android 构建体系，通过多个仓库的定向适配�
 
 关键机制：Java 层通过 `setOhosHapMode(true)` 设置环境变量，经 JNI 传入 ETS VM，在模块路由时激活 OHOS 兼容路径（自动适配 SDK 5.0/6.0 ABC record 名格式差异），使 ArkUI-X 能正确加载 OHOS 编译的 ABC 文件。
 
+## 界面
+
+宿主界面与 KiTerminal-UX 共用同一套设计系统：Miuix（MIUI 风格 Compose 组件）+ 玻璃材质顶栏 / 底栏，主题跟随系统深浅色与 Material You。主页拆成两个标签页：
+
+| 标签页 | 内容 |
+|--------|------|
+| **应用** | 已安装 HAP 的网格、搜索、排序、长按菜单（启动 / 卸载 / 添加到桌面）、安装预览 |
+| **设置** | 机型模拟、默认排序、应用权限、HDC 服务、外观、检查更新、反馈 |
+
+原先挂在 `MainActivity` 选项菜单里的设置项已全部迁到设置页，菜单本身不再保留。
+
+- API 33+ 使用浮动玻璃底栏（AGSL 运行时着色器）；API 30~32 自动回退到 Miuix 经典 `NavigationBar`。
+- 玻璃材质相关代码以 vendor 方式放在 `app/src/main/java/top/yukonga/` 下，与上游组件库解耦，便于逐文件同步。
+
+## 机型模拟
+
+HOA 允许把"上报给 HAP 的设备信息"改成任意机型，设置页 → **模拟机型** 提供一批华为 / 鸿蒙预设，也可以 **自定义机型** 手动填写字段，或选 **跟随宿主设备** 用真机信息。
+
+实现在 `app/src/main/java/app/hackeris/hoa/device/`：
+
+- `DeviceProfile` — 机型档案（brand / manufacturer / model / product / device / board / hardware / fingerprint / osVersion）
+- `DeviceProfileStore` — 持久化到 `hoa_device_profile` SharedPreferences
+- `BuildSpoofer` — 在 `HoaApplication.onCreate()` 最早期用 `sun.misc.Unsafe`（失败退回反射）覆盖 `android.os.Build` 的静态字段
+
+生效范围：
+
+- `ohos.ace.plugin.device_infoplugin.DeviceInfoPlugin` 直接读 `Build.MODEL` 等静态字段，因此 `@ohos.deviceInfo` 拿到的是模拟后的值；
+- HDC `param get` 的 `const.product.model / brand / devicetype / software.version` 等分支读同一份档案；
+- 不在范围内的：`Build.FINGERPRINT` 以外的厂商私有字段、以及 HAP 里直接调 Android API 的场景。
+
+## 状态栏避让
+
+HAP 页面里 `window.getWindowAvoidArea(window.AvoidAreaType.TYPE_SYSTEM)` 之前恒返回 0，原因是宿主 Activity 自己给 `android.R.id.content` 加了状态栏高度的 padding：
+
+ArkUI-X 的 `WindowViewCommon.processAvoidAreas()` 用 `intersection(WindowView 窗口矩形, (0,0,screenW,insets.top))` 算顶边避让区，而窗口矩形取自 `getLocationOnScreen()`。content 被 padding 顶下来之后，窗口起点正好等于 `insets.top`，两者求交恒为空。
+
+现在的做法（`HoaAbilityActivity.configureEdgeToEdgeForHap()`）：
+
+1. `setDecorFitsSystemWindows(window, false)`，insets 一路下发到 WindowView 根视图；
+2. content 不加 padding、不消费 insets（监听器原样返回），窗口矩形保持 `(0, 0, w, h)`；
+3. 系统栏透明，状态栏图标明暗按 HAP 窗口背景亮度决定。
+
+这样顶边避让区就是真实状态栏高度，**宿主不再替 HAP 让位**，由 HAP 自己（ArkUI 默认的 safe area，或显式 `expandSafeArea`）决定内容铺到哪。
+
 ## 构建
 
 > **首次构建前请务必阅读 [`docs/BUILD.md`](docs/BUILD.md)**，其中包含前提条件、工具链安装、源码下载、编译及常见问题的完整说明。
@@ -82,6 +126,20 @@ repo init (HOA manifest) → prebuilts_download.sh → build.sh → build_musl_b
 ```
 
 构建耗时数小时不等，视机器性能和网络状况而定。磁盘需求约 100GB（源码 + 产物）。
+
+### CI
+
+仓库自带两条 GitHub Actions 流水线，签名材料与 KiTerminal-UX 完全同款（同一个 `app/ki-terminal-release.jks`、同一个 alias、同一组 Secrets 名）：
+
+| Workflow | 触发 | 产物 |
+|----------|------|------|
+| `build_apk.yml` | `workflow_dispatch`（可选 debug / release / both）、push / PR 到 `main` | `hoa-debug` / `hoa-release` artifact |
+| `release_apk.yml` | 发布 Release / 手动指定 tag | 签好名的 APK 自动挂到 Release |
+
+需要的 Secrets：`JKS_BASE64`（keystore 的 base64）、`KI_TERMINAL_STORE_PASSWORD`、`KI_TERMINAL_KEY_PASSWORD`、`KI_TERMINAL_KEY_ALIAS`（可选，默认 `ki-terminal`）。
+
+ArkUI-X 产物（`jniLibs` / `arkui_android_adapter.jar` / `assets/sys`）由 `.github/actions/prepare-arkui-x` 恢复：先查 Actions 缓存，未命中时从本仓库 Release 的 `arkui-x-prebuilts-arm64.zip` 或仓库变量 `HOA_PREBUILT_URL` 下载并回写缓存。**没有这份产物就打不出 APK**——它来自 ArkUI-X 的 100GB 级源码构建，CI 里不会重头编译。
+
 
 ## 运行
 

@@ -57,6 +57,10 @@ open class HoaAbilityActivity : StageActivity() {
         // linker does not search the HAP extraction directory by default.
         preloadNativeDeps(bundleName, moduleName)
 
+        // 先让 decor 边到边，super.onCreate() 创建 SurfaceView 时窗口尺寸就是全屏；
+        // 否则首帧会按"扣掉状态栏"的高度建表面，之后再改回来要闪一下。
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+
         try {
             super.onCreate(savedInstanceState)
             Log.e(TAG, "super.onCreate() completed — ArkUI rendering surface should be created")
@@ -74,7 +78,7 @@ open class HoaAbilityActivity : StageActivity() {
         super.onPostCreate(savedInstanceState)
         // Apply HAP metadata (title + icon) AFTER super.onCreate() so that
         // any title/task-description set by StageActivity is overwritten.
-        applyWindowInsetsPadding()
+        configureEdgeToEdgeForHap()
         val bundleName = intent.getStringExtra("BUNDLE_NAME") ?: "app.hackeris.harmonyexample"
         val moduleName = intent.getStringExtra("MODULE_NAME") ?: "entry"
         val abilityName = intent.getStringExtra("ABILITY_NAME") ?: "EntryAbility"
@@ -205,37 +209,74 @@ open class HoaAbilityActivity : StageActivity() {
         android.os.Process.killProcess(android.os.Process.myPid())
     }
 
-    // Apply Android system window insets (status bar, navigation bar) as
-    // padding on the root content view so ArkUI content doesn't render under
-    // the system bars.  Without this, HAPs using expandSafeArea(TOP) bleed
-    // into the status bar and become unreadable / unclickable.
-    private fun applyWindowInsetsPadding() {
-        // Pick up the activity's window background colour and apply it to the
-        // status bar and navigation bar so they blend with the HAP's own UI
-        // background instead of showing the system-default colour.
+    // ================================================================
+    // 状态栏避让：宿主不再替 HAP 让位，改成把真实 insets 交给运行时
+    // ================================================================
+    //
+    // 旧实现把 `android.R.id.content` 按状态栏高度 padding 掉，看起来"避让了"，
+    // 实际上把 HAP 能拿到的避让区抹平了：
+    //
+    //   ArkUI-X 的 WindowViewCommon 在它自己的根视图上监听 insets，再用
+    //   `processAvoidAreas()` 把 insets 换算成 avoid area：
+    //     top avoid = intersection(窗口矩形, (0, 0, screenW, insets.top))
+    //   而窗口矩形来自 getLocationOnScreen()。宿主给 content 加了 top padding 之后，
+    //   WindowView 的 y 起点正好等于 insets.top，二者求交得到空矩形 ——
+    //   HAP 拿到的顶边避让区恒为 0，`window.getWindowAvoidArea()` /
+    //   `expandSafeArea` 全部失效，只能看到一条被宿主压掉的、高度不对的可视区。
+    //
+    // 现在的做法：
+    //   1. `setDecorFitsSystemWindows(false)`，让 insets 一路传到 WindowView 根视图；
+    //   2. content 不加 padding、不消费 insets（监听器原样返回），窗口矩形保持
+    //      (0, 0, w, h)；
+    //   3. 系统栏透明、图标明暗按 HAP 背景亮度决定。
+    //   这样 top avoid area 就等于真实状态栏高度，HAP 自己做让位（ArkUI 默认
+    //   就会给页面加 safe area，只有显式 expandSafeArea 才铺到栏下）。
+    private fun configureEdgeToEdgeForHap() {
+        val window = this.window
+        // 关键的一步：decor 不再消费 insets。
+        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+
+        // 系统栏透明，内容穿过状态栏 / 导航栏区域。
+        @Suppress("DEPRECATION")
+        window.statusBarColor = android.graphics.Color.TRANSPARENT
+        @Suppress("DEPRECATION")
+        window.navigationBarColor = android.graphics.Color.TRANSPARENT
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            @Suppress("DEPRECATION")
+            window.isStatusBarContrastEnforced = false
+            @Suppress("DEPRECATION")
+            window.isNavigationBarContrastEnforced = false
+        }
+
+        // 状态栏图标明暗跟随 HAP 自己的窗口背景色，避免白底白字 / 黑底黑字。
         val ta = theme.obtainStyledAttributes(intArrayOf(android.R.attr.windowBackground))
         val bgDrawable = ta.getDrawable(0)
         ta.recycle()
-        if (bgDrawable is android.graphics.drawable.ColorDrawable) {
+        val lightIcons = if (bgDrawable is android.graphics.drawable.ColorDrawable) {
             val bgColor = bgDrawable.color
-            window.statusBarColor = bgColor
-            window.navigationBarColor = bgColor
-            // Choose light/dark status bar icons based on background luminance
             val luminance = 0.299 * android.graphics.Color.red(bgColor) +
-                            0.587 * android.graphics.Color.green(bgColor) +
-                            0.114 * android.graphics.Color.blue(bgColor)
-            val insetsController = androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-            insetsController.isAppearanceLightStatusBars = luminance > 128
+                0.587 * android.graphics.Color.green(bgColor) +
+                0.114 * android.graphics.Color.blue(bgColor)
+            luminance > 128
+        } else {
+            // 拿不到纯色背景时跟随系统深浅色，和宿主保持一致的观感。
+            val nightMode = resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK
+            nightMode != android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        androidx.core.view.WindowCompat.getInsetsController(window, window.decorView).apply {
+            isAppearanceLightStatusBars = lightIcons
+            isAppearanceLightNavigationBars = lightIcons
+            systemBarsBehavior =
+                androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
-        val rootView = window.decorView.findViewById<android.view.View>(android.R.id.content)
-        if (rootView != null) {
-            androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(rootView) { view, insets ->
-                val statusBars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.statusBars())
-                view.setPadding(0, statusBars.top, 0, 0)
-                insets
-            }
-        }
+        // 清掉宿主之前可能留下的 padding，并保证不消费 insets：
+        // 监听器原样返回 insets，后面的 View 与 WindowView 根视图都能读到真值。
+        val content = findViewById<android.view.ViewGroup>(android.R.id.content)
+        content.setPadding(0, 0, 0, 0)
+        content.fitsSystemWindows = false
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { _, insets -> insets }
     }
 
     override fun onBackPressed() {

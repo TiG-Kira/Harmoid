@@ -35,30 +35,35 @@ chmod a+x /usr/local/bin/repo
 
 ### Java
 
+AGP 9.1 要求 JDK 17+，推荐 21（CI 用的就是 21）。
+
 ```bash
-apt install openjdk-17-jdk
+apt install openjdk-21-jdk
 export JAVA_HOME=/path/to/jdk
 export PATH=${JAVA_HOME}/bin:${PATH}
 ```
 
 ### Android SDK
 
-需要 NDK 21.3.6528147、SDK Platform 34、Build Tools 28.0.3+。
+宿主 App 侧的构建参数（见 `app/build.gradle.kts`）：`compileSdk = 37`、`targetSdk = 36`、`minSdk = 30`、NDK `28.2.13676358`、CMake `3.22.1`、Gradle `9.7.1`。
 
 ```bash
-./sdkmanager --install "ndk;21.3.6528147" --sdk_root=/path/to/Android/Sdk
-./sdkmanager --install "platforms;android-34" --sdk_root=/path/to/Android/Sdk
-./sdkmanager --install "build-tools;28.0.3" --sdk_root=/path/to/Android/Sdk
+./sdkmanager --install "ndk;28.2.13676358" --sdk_root=/path/to/Android/Sdk
+./sdkmanager --install "platforms;android-37" --sdk_root=/path/to/Android/Sdk
+./sdkmanager --install "build-tools;36.0.0" --sdk_root=/path/to/Android/Sdk
+./sdkmanager --install "cmake;3.22.1" --sdk_root=/path/to/Android/Sdk
 
 export ANDROID_HOME=/path/to/Android/Sdk
-export PATH=${ANDROID_HOME}/tools:${ANDROID_HOME}/tools/bin:${ANDROID_HOME}/build-tools/28.0.3:${ANDROID_HOME}/platform-tools:${PATH}
+export PATH=${ANDROID_HOME}/platform-tools:${PATH}
 ```
 
-HOA 项目根目录创建 `local.properties`：
+HOA 项目根目录创建 `local.properties`（Windows 下注意反斜杠要转义）：
 
 ```
 sdk.dir=/path/to/Android/Sdk
 ```
+
+UI 依赖（Miuix、kyant backdrop/shapes）都在 Maven Central，**不需要 GitHub Packages token**。
 
 ### musl bridge 额外依赖
 
@@ -179,11 +184,46 @@ ARKUI_BUILD=~/arkui-x-hoa/out/arkui-x/aosp_clang_arm64_release ./scripts/sync_ar
 
 ## Step 6: 构建 APK
 
+前提是 Step 5 已经把 ArkUI-X 产物同步进来，`app/src/main/jniLibs/arm64-v8a/libarkui_android.so` 与 `app/libs/arkui_android_adapter.jar` 必须存在——CMake 里的 `-larkui_android` 直接以它为链接目标，缺了会在 `ninja` 阶段报 `unable to find library -larkui_android`。
+
 ```bash
 ./gradlew assembleDebug
 ```
 
 产物: `app/build/outputs/apk/debug/app-debug.apk` (~85MB)
+
+Release（需要签名材料，见下）：
+
+```bash
+export KI_TERMINAL_STORE_PASSWORD=...
+export KI_TERMINAL_KEY_PASSWORD=...
+export KI_TERMINAL_KEY_ALIAS=...      # 可选，默认 ki-terminal
+./gradlew assembleRelease
+```
+
+---
+
+## CI 与预编译产物
+
+`.github/workflows/build_apk.yml` / `release_apk.yml` 不会重头编译 ArkUI-X，它们通过 `.github/actions/prepare-arkui-x` 恢复产物：
+
+1. 先查 Actions 缓存（key 由 `scripts/sync_arkui_x.sh` 与 `manifests/hoa-weekly.xml` 的哈希决定）；
+2. 未命中则从本仓库 Release 下载 `arkui-x-prebuilts-arm64.zip`，或从仓库变量 `HOA_PREBUILT_URL` 指定的地址拉取；
+3. 解压后校验 `libarkui_android.so` / `arkui_android_adapter.jar` / `assets/sys/systemres` 三件套；
+4. 校验通过后回写缓存。
+
+制包方法（在**能跑完整构建的机器**上做一次即可）：
+
+```bash
+zip -r arkui-x-prebuilts-arm64.zip \
+  app/src/main/jniLibs \
+  app/libs \
+  app/src/main/assets/sys
+```
+
+然后把 zip 传到本仓库的 Release（文件名保持一致），或把下载直链写进仓库变量 `HOA_PREBUILT_URL`。
+
+签名 Secrets 与 KiTerminal-UX 同名同义：`JKS_BASE64`、`KI_TERMINAL_STORE_PASSWORD`、`KI_TERMINAL_KEY_PASSWORD`、`KI_TERMINAL_KEY_ALIAS`。私钥不入库（`*.jks` 已在 `.gitignore` 里）。
 
 ---
 

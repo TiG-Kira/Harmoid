@@ -1,6 +1,9 @@
 package app.hackeris.hoa
 
 import android.webkit.WebView
+import app.hackeris.hoa.device.BuildSpoofer
+import app.hackeris.hoa.device.DeviceProfile
+import app.hackeris.hoa.device.DeviceProfileStore
 import app.hackeris.hoa.logging.LogWriter
 import ohos.stage.ability.adapter.StageApplication
 import ohos.stage.ability.adapter.StageApplicationDelegate
@@ -18,6 +21,16 @@ class HoaApplication : StageApplication() {
         LogWriter.init(getExternalFilesDir(null) ?: filesDir)
         LogWriter.e(TAG, "========== HOA Application onCreate START ==========")
         LogWriter.e(TAG, "Process: ${android.os.Process.myPid()}  Name: ${currentProcessName()}")
+
+        // 机型模拟必须抢在任何会读 Build 的代码之前：
+        // ArkUI-X 的 DeviceInfoPlugin 是 Java 类，字段读取发生在 Java 侧，
+        // 这里覆盖 static 字段之后，JNI 侧读到的就是模拟值。
+        // 每个 :hap 进程都会走一遍 Application.onCreate，所以每条 HAP 都吃得到。
+        // 覆盖之前先把真机身份存下来，设置页「跟随宿主设备」才有正确值可回填。
+        DeviceProfile.captureHost()
+        val deviceProfile = DeviceProfileStore.load(this)
+        BuildSpoofer.apply(deviceProfile)
+        LogWriter.e(TAG, "Device profile: ${deviceProfile.displayName} (model=${deviceProfile.model})")
 
         // Only initialize the ArkUI-X runtime (libarkui_android.so, ~79 MB) in
         // HAP worker processes (":hap*").  The main process only hosts

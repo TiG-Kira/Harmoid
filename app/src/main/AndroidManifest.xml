@@ -61,6 +61,11 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.NFC" />
 
+    <!-- miuix-blur 声明 minSdk 33（AGSL shader），HOA 仍支持 Android 11（API 30）。
+         浮动玻璃底栏在代码里按 SDK_INT >= 33 门控，低版本自动回退 Miuix 经典底栏，
+         因此这里放行合并检查是安全的。 -->
+    <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
+
     <application
         android:name=".HoaApplication"
         android:allowBackup="true"

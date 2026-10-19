@@ -33,3 +33,7 @@ app/src/main/cpp/obj/
 third_party/build_android
 third_party/build_gen
 third_party/build/
+
+# APK 签名私钥：与 KiTerminal-UX 同款，但不入库；CI 由 Secrets.JKS_BASE64 注入
+app/ki-terminal-release.jks
+*.jks

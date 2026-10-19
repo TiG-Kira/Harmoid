@@ -29,7 +29,7 @@ object UpdateChecker {
                 val info = context.packageManager.getPackageInfo(context.packageName, 0)
                 @Suppress("DEPRECATION")
                 val localCode = info.versionCode
-                val localName = info.versionName
+                val localName = info.versionName ?: ""
 
                 val latest = fetchLatestRelease()
                 if (latest == null) {

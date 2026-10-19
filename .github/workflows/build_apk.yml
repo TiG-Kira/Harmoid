@@ -1,0 +1,123 @@
+name: 构建 APK
+
+# debug / release 两个变体共用一套流程：
+#   - 手动触发：可选 debug、release 或两者
+#   - push 到 main：只出 debug 包（release 要签名，走 release_apk.yml）
+#
+# 签名材料与 KiTerminal-UX 完全同款：同一个 ki-terminal-release.jks、同一个 alias，
+# 口令从同名 Secrets 注入，仓库里不出现明文。
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: "构建哪个变体"
+        required: true
+        type: choice
+        default: both
+        options:
+          - both
+          - debug
+          - release
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: build-apk-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # 只构建 debug：push / PR 走这条，快且不需要签名
+  debug:
+    if: github.event_name != 'workflow_dispatch' || inputs.variant == 'both' || inputs.variant == 'debug'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: 恢复 ArkUI-X 预编译产物
+        uses: ./.github/actions/prepare-arkui-x
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 编译 Debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: 上传 Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hoa-debug
+          if-no-files-found: error
+          path: app/build/outputs/apk/debug/*.apk
+
+  release:
+    if: github.event_name == 'workflow_dispatch' && (inputs.variant == 'both' || inputs.variant == 'release')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # 与 KiTerminal-UX 同名同义：口令只在这里可见，其它作业拿不到。
+      KI_TERMINAL_STORE_PASSWORD: ${{ secrets.KI_TERMINAL_STORE_PASSWORD }}
+      KI_TERMINAL_KEY_PASSWORD: ${{ secrets.KI_TERMINAL_KEY_PASSWORD }}
+      KI_TERMINAL_KEY_ALIAS: ${{ secrets.KI_TERMINAL_KEY_ALIAS }}
+      JKS_BASE64: ${{ secrets.JKS_BASE64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 设置 JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: 恢复 ArkUI-X 预编译产物
+        uses: ./.github/actions/prepare-arkui-x
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 解码签名私钥（与 KiTerminal-UX 同款 JKS）
+        env:
+          JKS_BASE64: ${{ secrets.JKS_BASE64 }}
+        run: |
+          if [ -n "$JKS_BASE64" ]; then
+            echo "$JKS_BASE64" | base64 -d > app/ki-terminal-release.jks
+            echo "JKS 写入完成：$(stat -c%s app/ki-terminal-release.jks) 字节"
+          elif [ -s app/ki-terminal-release.jks ]; then
+            echo "使用仓库内已有的 ki-terminal-release.jks"
+          else
+            echo "::error::缺少私钥：请在 Secrets 里配置 JKS_BASE64（与 KiTerminal-UX 同一份 keystore）"
+            exit 1
+          fi
+
+      - name: 校验签名材料
+        run: |
+          test -s app/ki-terminal-release.jks || { echo "::error::仓库内缺少 ki-terminal-release.jks"; exit 1; }
+          test -n "$KI_TERMINAL_STORE_PASSWORD" || { echo "::error::缺少 Secrets.KI_TERMINAL_STORE_PASSWORD"; exit 1; }
+          test -n "$KI_TERMINAL_KEY_PASSWORD" || { echo "::error::缺少 Secrets.KI_TERMINAL_KEY_PASSWORD"; exit 1; }
+
+      - name: 编译 Release APK（同款私钥签名）
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: 核验签名
+        run: |
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "产物: $apk"
+          bt="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
+          echo "使用 build-tools: $bt"
+          "$bt/apksigner" verify --print-certs "$apk"
+
+      - name: 上传 Release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hoa-release
+          if-no-files-found: error
+          path: app/build/outputs/apk/release/*.apk

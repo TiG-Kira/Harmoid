@@ -622,6 +622,71 @@ RDB 的 `IsEncrypt()` 检查顺序为 `encryptAlgo != PLAIN_TEXT` → `isEncrypt
 
 ---
 
+### 29. 宿主 UI 重构 — 应用页 / 设置页双 Tab（2026-10-19）
+
+**动机**：原来所有设置项都塞在 `MainActivity` 的 `onCreateOptionsMenu` 里，HAP 列表和设置混在一起；同时宿主界面和 KiTerminal-UX 的观感完全脱节。
+
+**做法**：整套搬 KiTerminal-UX 的设计体系，不是"照着画"，而是共用组件。
+
+- **依赖**：`top.yukonga.miuix.kmp:miuix 0.9.4`（Miuix 组件库）、`io.github.kyant0:backdrop-android 2.0.1` + `shapes-android 1.2.1`（玻璃材质底层），全部走 Maven Central，CI 不需要任何 token。
+- **vendor 组件**：`top/yukonga/miuix/kmp/**` 从 KiTerminal-UX 直接复制（19 个 glass 组件 + `BlurTopAppBar` + `MiuixGlassIcons` 图标集 + `CascadingPopupDefaults`），不依赖上游组件库版本漂移。
+- **主题**：`ui/theme/HoaTheme.kt` 与 `KiTerminalTheme` 同构 —— `ThemePrefs.init` → `materialYou` StateFlow → `isSystemInDarkTheme` → `MiuixTheme(ThemeController(colorSchemeMode))`；`MonetSystem` 需要 API 31+。
+- **主页**：`ui/HoaMainScreen.kt` 照搬 `MainScreen` 骨架（`TopAppBarState`、`MiuixScrollBehavior`、`rememberLayerBackdrop()`、`topBarContent` 状态槽、`AnimatedContent` fade 300/150）。
+- **应用页**：`ui/AppsScreen.kt`，两列 `LazyVerticalGrid`，玻璃顶栏（搜索 / 排序 / 安装三个 icon button），搜索用 `SearchBar + InputField`，排序与长按菜单用 `WindowDialog + ArrowPreference`。
+- **设置页**：`ui/SettingsScreen.kt`，`SettingsGroupCard` 分组 —— 设备模拟、应用、连接（HDC 开关 + 端口）、外观（Material You）、关于（检查更新 / 反馈 / 版本）。
+- **状态**：`ui/HoaViewModel.kt` 收口 HAP 列表、排序、安装预览、启动、卸载、添加到桌面，`SortMode.labelRes()/summaryRes()` 也放这里避免两个 Screen 重复声明。
+
+**API 33 回退**：玻璃底栏依赖 AGSL 运行时着色器，`SDK_INT < 33` 时换成 Miuix 经典 `NavigationBar`；`AndroidManifest.xml` 里用 `<uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />` 放宽 miuix-blur 的 minSdk 33 限制（HOA 自己是 30）。
+
+**构建工具链同时升级**：Gradle 9.7.1、AGP 9.1.0（自带 Kotlin 支持，移除 `org.jetbrains.kotlin.android` 插件）、compileSdk 37、NDK 28.2.13676358。
+
+---
+
+### 30. HAP 拿不到宿主状态栏高度 — 避让区被宿主抹平（2026-10-19）
+
+**现象**：HAP 里 `window.getWindowAvoidArea(TYPE_SYSTEM)` 顶边恒为 0，页面在刘海屏上被状态栏压住，`expandSafeArea` 也不起作用。
+
+**根因**：宿主的 `HoaAbilityActivity.applyWindowInsetsPadding()` 给 `android.R.id.content` 加了 `statusBars.top` 的 padding，看起来"避让了"，实际把避让区吃掉了：
+
+ArkUI-X `WindowViewCommon.processAvoidAreas()` 的算法是
+
+```
+top avoid = intersection(WindowView 窗口矩形, (0, 0, screenW, insets.top))
+```
+
+窗口矩形取自 `getLocationOnScreen()`。content 被 padding 顶下来之后，WindowView 的 y 起点正好等于 `insets.top`，与 `(0,0,...,insets.top)` 求交得到空矩形 → `nativeAvoidAreaChanged` 上报 0 → `Window::OnSafeAreaChange()` 拿到空区域。
+
+**修复**（`HoaAbilityActivity.configureEdgeToEdgeForHap()`，在 `onPostCreate` 调用；`super.onCreate` 之前先 `setDecorFitsSystemWindows(false)`，避免首帧按"扣掉状态栏"的高度建 Surface）：
+
+1. `setDecorFitsSystemWindows(window, false)` — decor 不再消费 insets；
+2. content 不加 padding、`fitsSystemWindows = false`、`setOnApplyWindowInsetsListener` 原样返回 insets — 窗口矩形保持 `(0, 0, w, h)`；
+3. 系统栏透明 + `isStatusBarContrastEnforced = false`，状态栏图标明暗按 HAP 窗口背景亮度决定；
+4. `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — 手势导航下不挡内容。
+
+结果：顶边避让区 = 真实状态栏高度，宿主不再替 HAP 让位，改由 HAP 自己（ArkUI 默认 safe area / 显式 `expandSafeArea`）决定内容铺到哪。**不需要改 ArkUI-X 源码**。
+
+---
+
+### 31. 可自定义模拟机型（2026-10-19）
+
+**动机**：HAP 通过 `@ohos.deviceInfo` 读到的永远是真实 Android 机型，部分 HAP 会按机型走不同分支（平板布局、折叠屏、HarmonyOS 专属能力探测）。
+
+**实现**（`app/src/main/java/app/hackeris/hoa/device/`）：
+
+| 文件 | 职责 |
+|------|------|
+| `DeviceProfile.kt` | 机型档案 data class（brand/manufacturer/model/product/device/board/hardware/fingerprint/osVersion）+ `PRESETS`（Mate 60 Pro / Mate 70 Pro / Pura 70 Ultra / Mate X5 / MatePad Pro 13.2 / OpenHarmony 通用） |
+| `DeviceProfileStore.kt` | `hoa_device_profile` SharedPreferences 持久化，`load/save/invalidate` |
+| `BuildSpoofer.kt` | 用 `sun.misc.Unsafe.putObject(staticFieldBase/Offset)` 覆盖 `android.os.Build` 静态字段，失败退回普通反射 |
+
+**为什么在 Java 侧覆盖能生效**：`DeviceInfoPlugin` 是 Java 类，`getProductModel()/getMarketName()/getBrand()/getManufacture()/getProductSeries()/getHardwareModel()` 全部 `return Build.XXX;`，读的是静态字段而不是 native 查询。覆盖时机放在 `HoaApplication.onCreate()` 最早期（`DeviceInfoPlugin` 在 `Application.onCreate` 之后才被调用）。
+
+**联动**：HDC `param get` 的 `const.product.model/name/brand/manufacturer/devicetype`、`const.build.product`、`ro.product.*`、`const.product.software.version` 都改为读同一份档案，保证 DevEco 里看到的型号和 HAP 里读到的一致。
+
+**边界**：只覆盖上述 8 个 `Build` 字段，厂商私有字段（如 `Build.MIUI_VERSION`）与 HAP 直接调 Android API 的场景不受影响。
+
+---
+
 ## 构建与工具链
 
 ```bash

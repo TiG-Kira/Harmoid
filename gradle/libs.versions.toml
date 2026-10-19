@@ -1,13 +1,25 @@
 [versions]
-agp = "8.2.2"
-kotlin = "1.9.22"
-coreKtx = "1.12.0"
+agp = "9.1.0"
+kotlin = "2.4.20"
+coreKtx = "1.19.0"
 junit = "4.13.2"
 junitVersion = "1.1.5"
 espressoCore = "3.5.1"
-appcompat = "1.6.1"
+appcompat = "1.8.0"
 material = "1.11.0"
 constraintlayout = "2.1.4"
+
+# UI 设计体系：与 KiTerminal-UX 完全同一套（Miuix 0.9.4 + 玻璃材质）
+miuix = "0.9.4"
+composeUi = "1.8.3"
+composeMaterial3 = "1.3.0"
+composeMaterialIcons = "1.7.8"
+activityCompose = "1.9.3"
+lifecycleCompose = "2.8.5"
+navigationEvent = "1.1.2"
+kyantBackdrop = "2.0.1"
+kyantShapes = "1.2.1"
+coroutines = "1.9.0"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -18,6 +30,26 @@ androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version
 material = { group = "com.google.android.material", name = "material", version.ref = "material" }
 androidx-constraintlayout = { group = "androidx.constraintlayout", name = "constraintlayout", version.ref = "constraintlayout" }
 
+# Miuix
+miuix-ui = { group = "top.yukonga.miuix.kmp", name = "miuix-ui-android", version.ref = "miuix" }
+miuix-blur = { group = "top.yukonga.miuix.kmp", name = "miuix-blur-android", version.ref = "miuix" }
+miuix-icons = { group = "top.yukonga.miuix.kmp", name = "miuix-icons-android", version.ref = "miuix" }
+miuix-preference = { group = "top.yukonga.miuix.kmp", name = "miuix-preference-android", version.ref = "miuix" }
+
+# Compose
+compose-ui = { group = "androidx.compose.ui", name = "ui", version.ref = "composeUi" }
+compose-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "composeMaterial3" }
+compose-material-icons = { group = "androidx.compose.material", name = "material-icons-extended", version.ref = "composeMaterialIcons" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+androidx-lifecycle-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycleCompose" }
+androidx-coroutines = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# 玻璃材质（Miuix glass 模块依赖）
+androidx-navigationevent = { group = "androidx.navigationevent", name = "navigationevent-compose-android", version.ref = "navigationEvent" }
+kyant-backdrop = { group = "io.github.kyant0", name = "backdrop-android", version.ref = "kyantBackdrop" }
+kyant-shapes = { group = "io.github.kyant0", name = "shapes-android", version.ref = "kyantShapes" }
+
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }

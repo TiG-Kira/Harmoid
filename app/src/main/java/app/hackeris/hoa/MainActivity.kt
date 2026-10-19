@@ -1,695 +1,371 @@
 package app.hackeris.hoa
 
-import android.app.AlertDialog
-import android.content.Intent
-import android.content.pm.ShortcutInfo
-import android.content.pm.ShortcutManager
-import android.graphics.drawable.Icon
-import android.net.Uri
-import android.os.Bundle
-import android.provider.Settings
-import app.hackeris.hoa.logging.LogCollector
-import app.hackeris.hoa.logging.LogWriter
-import android.view.Menu
-import android.view.View
-import android.view.ViewGroup
-import android.widget.BaseAdapter
 import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
 import android.content.IntentFilter
-import android.widget.Button
-import android.widget.ListView
-import android.widget.TextView
-import android.widget.Toast
-import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.widget.SearchView
-import app.hackeris.hoa.hap.HapBundleLoader
-import app.hackeris.hoa.hap.HapInstaller
-import app.hackeris.hoa.hap.InstalledHap
-import app.hackeris.hoa.hdc.DEFAULT_PORT
-import app.hackeris.hoa.hdc.HdcService
+import android.net.Uri
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
+import androidx.lifecycle.viewmodel.compose.viewModel
+import app.hackeris.hoa.hap.ModuleConfig
+import app.hackeris.hoa.logging.LogWriter
+import app.hackeris.hoa.ui.HoaMainScreen
+import app.hackeris.hoa.ui.HoaViewModel
+import app.hackeris.hoa.ui.InstallPreview
+import app.hackeris.hoa.ui.SortMode
+import app.hackeris.hoa.ui.theme.HoaTheme
+import app.hackeris.hoa.ui.theme.ThemePrefs
+import top.yukonga.miuix.kmp.basic.SnackbarDuration
+import top.yukonga.miuix.kmp.basic.SnackbarHost
+import top.yukonga.miuix.kmp.basic.SnackbarHostState
+import top.yukonga.miuix.kmp.basic.Text
+import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.theme.MiuixTheme.textStyles
+import top.yukonga.miuix.kmp.window.WindowDialog
 
-enum class SortMode {
-    NAME, TIME_DESC, TIME_ASC
-}
+/**
+ * 主页：应用页 + 设置页两个 Tab 的 Compose 外壳。
+ *
+ * Activity 只负责「壳」的职责 —— 窗口边到边、Intent 路由、文件选择、广播接收；
+ * 列表状态与安装动作都在 [HoaViewModel] 里。
+ */
+class MainActivity : ComponentActivity() {
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var installer: HapInstaller
-    private lateinit var hapList: ListView
-    private lateinit var emptyHint: TextView
-    private lateinit var installButton: Button
-    private var searchView: SearchView? = null
-    private var sortMenu: Menu? = null
-
-    private val hapAdapter = HapListAdapter()
-    private var allHaps = listOf<InstalledHap>()
-    private var installedHaps = listOf<InstalledHap>()
-    private var sortMode = SortMode.TIME_ASC
-    private var searchQuery = ""
-
-    private val hapInstallReceiver = object : BroadcastReceiver() {
+    private var pendingUri: Uri? = null
+    private val installReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            refreshHapList()
+            // 安装完成后再刷新一次列表，覆盖 HDC / 外部进程写入的情况。
+            currentRefresh?.invoke()
         }
     }
 
+    private var currentRefresh: (() -> Unit)? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        installer = HapInstaller(this)
-        hapList = findViewById(R.id.hap_list)
-        emptyHint = findViewById(R.id.empty_hint)
-        installButton = findViewById(R.id.install_button)
-
-        hapList.adapter = hapAdapter
-        hapList.setOnItemClickListener { _, _, position, _ ->
-            val hap = installedHaps[position]
-            launchHap(hap)
-        }
-        hapList.setOnItemLongClickListener { _, view, position, _ ->
-            val hap = installedHaps[position]
-            showLongPressMenu(view, hap)
-            true
-        }
-
-        installButton.setOnClickListener {
-            openHapPicker()
-        }
-
+        ThemePrefs.init(this)
+        // 边到边：状态栏 / 导航栏透明，内容自己决定怎么避让。
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         LogWriter.e(TAG, "========== HOA MainActivity START ==========")
 
-        // Handle HAP file opened from file manager or shared from another app
-        handleIntent(intent)
+        pendingUri = extractHapUri(intent)
 
-        // First-launch disclaimer
-        val prefs = getSharedPreferences("hoa_prefs", MODE_PRIVATE)
-        if (!prefs.getBoolean("first_launch_done", false)) {
-            AlertDialog.Builder(this)
-                .setTitle(getString(R.string.first_launch_title))
-                .setMessage(getString(R.string.first_launch_msg))
-                .setCancelable(false)
-                .setPositiveButton(getString(R.string.first_launch_btn)) { _, _ ->
-                    prefs.edit().putBoolean("first_launch_done", true).apply()
-                }
-                .show()
+        androidx.core.content.ContextCompat.registerReceiver(
+            this,
+            installReceiver,
+            IntentFilter("app.hackeris.hoa.HAP_INSTALLED"),
+            androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+
+        setContent {
+            HoaTheme {
+                HoaRoot(
+                    initialUri = pendingUri,
+                    onRefreshHandlerReady = { currentRefresh = it },
+                )
+            }
         }
+    }
 
-        registerReceiver(hapInstallReceiver, IntentFilter("app.hackeris.hoa.HAP_INSTALLED"))
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleShortcutOrOpen(intent)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try { unregisterReceiver(hapInstallReceiver) } catch (_: Exception) {}
+        try {
+            unregisterReceiver(installReceiver)
+        } catch (_: Exception) {
+        }
+        currentRefresh = null
     }
 
-    override fun onNewIntent(intent: Intent?) {
-        super.onNewIntent(intent)
-        intent?.let { handleIntent(it) }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        refreshHapList()
-    }
-
-    private fun handleIntent(intent: Intent) {
-        // Shortcut launch: MIUI may rewrite the pinned shortcut intent from
-        // HoaShortcutActivity → MainActivity.  If we see shortcut extras,
-        // allocate a slot and forward regardless of the action.
-        val shortcutBundle = intent.getStringExtra("BUNDLE_NAME")
-        if (shortcutBundle != null) {
+    /** 快捷方式启动（MIUI 可能把 Intent 重定向到 MainActivity）。 */
+    private fun handleShortcutOrOpen(intent: Intent) {
+        val bundle = intent.getStringExtra("BUNDLE_NAME")
+        if (bundle != null) {
             val module = intent.getStringExtra("MODULE_NAME") ?: "entry"
             val ability = intent.getStringExtra("ABILITY_NAME") ?: "EntryAbility"
-            handleShortcutLaunch(shortcutBundle, module, ability)
+            ProcessSlotManager.launchHap(this, bundle, module, ability)
             return
         }
+        extractHapUri(intent)?.let { uri ->
+            // Activity 已在前台时，直接交给 ViewModel 解析。
+            currentOpenUri?.invoke(uri)
+        }
+    }
 
-        val uri: Uri? = when (intent.action) {
+    private var currentOpenUri: ((Uri) -> Unit)? = null
+
+    /** Compose 侧注册「外部打开 HAP」的处理函数。 */
+    fun setOpenUriHandler(handler: (Uri) -> Unit) {
+        currentOpenUri = handler
+    }
+
+    private fun extractHapUri(intent: Intent?): Uri? {
+        if (intent == null) return null
+        return when (intent.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> {
                 @Suppress("DEPRECATION")
                 intent.getParcelableExtra(Intent.EXTRA_STREAM)
             }
-            else -> return
+            else -> null
         }
-        if (uri != null) {
-            LogWriter.e(TAG, "Handling HAP from intent: action=${intent.action} uri=$uri")
-            previewAndInstallHap(uri)
-        }
-    }
-
-    private fun handleShortcutLaunch(bundle: String, module: String, ability: String) {
-        if (ProcessSlotManager.launchHap(this, bundle, module, ability) < 0) {
-            Toast.makeText(this, getString(R.string.dialog_no_slots_msg, ProcessSlotManager.MAX_SLOTS), Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun refreshHapList() {
-        allHaps = installer.getInstalledHaps()
-        filterAndSort()
-    }
-
-    override fun onCreateOptionsMenu(menu: Menu): Boolean {
-        menuInflater.inflate(R.menu.main_toolbar, menu)
-
-        val searchItem = menu.findItem(R.id.action_search)
-        searchView = (searchItem.actionView as SearchView).apply {
-            queryHint = getString(R.string.hint_search_haps)
-            setOnQueryTextListener(object : SearchView.OnQueryTextListener {
-                override fun onQueryTextSubmit(query: String?): Boolean {
-                    searchQuery = query?.trim()?.lowercase() ?: ""
-                    filterAndSort()
-                    clearFocus()
-                    return true
-                }
-
-                override fun onQueryTextChange(newText: String?): Boolean {
-                    searchQuery = newText?.trim()?.lowercase() ?: ""
-                    filterAndSort()
-                    return true
-                }
-            })
-        }
-
-        sortMenu = menu.findItem(R.id.action_sort_menu).subMenu
-        sortMenu?.findItem(sortModeToItemId())?.isChecked = true
-
-        // Set initial HDC toggle title
-        val hdcItem = menu.findItem(R.id.action_hdc)
-        hdcItem.setTitle(if (isHdcRunning()) R.string.menu_hdc_stop else R.string.menu_hdc_start)
-
-        return true
-    }
-
-    override fun onOptionsItemSelected(item: android.view.MenuItem): Boolean {
-        val newMode = when (item.itemId) {
-            R.id.action_sort_name -> SortMode.NAME
-            R.id.action_sort_time_desc -> SortMode.TIME_DESC
-            R.id.action_sort_time_asc -> SortMode.TIME_ASC
-            R.id.action_permissions -> {
-                showPermissionsDialog()
-                return true
-            }
-            R.id.action_feedback -> {
-                showFeedbackDialog()
-                return true
-            }
-            R.id.action_check_update -> {
-                UpdateChecker.check(this) { result ->
-                    UpdateChecker.showResult(this, result)
-                }
-                return true
-            }
-            R.id.action_hdc -> {
-                toggleHdc(item)
-                return true
-            }
-            else -> return super.onOptionsItemSelected(item)
-        }
-        if (newMode != sortMode) {
-            sortMode = newMode
-            item.isChecked = true
-            filterAndSort()
-        }
-        return true
-    }
-
-    private fun sortModeToItemId(): Int = when (sortMode) {
-        SortMode.NAME -> R.id.action_sort_name
-        SortMode.TIME_DESC -> R.id.action_sort_time_desc
-        SortMode.TIME_ASC -> R.id.action_sort_time_asc
-    }
-
-    private fun filterAndSort() {
-        val filtered = if (searchQuery.isEmpty()) {
-            allHaps
-        } else {
-            allHaps.filter { hap ->
-                val label = HapBundleLoader.resolveLabel(hap.contentDir, hap.moduleConfig)
-                label.lowercase().contains(searchQuery) ||
-                    hap.bundleName.lowercase().contains(searchQuery) ||
-                    hap.moduleName.lowercase().contains(searchQuery)
-            }
-        }
-
-        installedHaps = when (sortMode) {
-            SortMode.NAME -> filtered.sortedBy {
-                HapBundleLoader.resolveLabel(it.contentDir, it.moduleConfig).lowercase()
-            }
-            SortMode.TIME_DESC -> filtered.sortedByDescending { it.contentDir.lastModified() }
-            SortMode.TIME_ASC -> filtered.sortedBy { it.contentDir.lastModified() }
-        }
-
-        hapAdapter.notifyDataSetChanged()
-
-        if (installedHaps.isEmpty()) {
-            hapList.visibility = View.GONE
-            emptyHint.visibility = View.VISIBLE
-            emptyHint.text = if (allHaps.isEmpty()) {
-                getString(R.string.hint_no_haps)
-            } else {
-                getString(R.string.hint_no_search_results)
-            }
-        } else {
-            hapList.visibility = View.VISIBLE
-            emptyHint.visibility = View.GONE
-        }
-    }
-
-    private fun openHapPicker() {
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
-            addCategory(Intent.CATEGORY_OPENABLE)
-            type = "*/*"
-        }
-        startActivityForResult(intent, REQUEST_PICK_HAP)
-    }
-
-    @Deprecated("Use Activity Result API")
-    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
-        if (requestCode == REQUEST_PICK_HAP && resultCode == RESULT_OK) {
-            val uri = data?.data ?: return
-            val name = queryFileName(uri)
-            if (name != null && !name.endsWith(".hap", ignoreCase = true) && !name.endsWith(".app", ignoreCase = true)) {
-                com.google.android.material.snackbar.Snackbar.make(
-                    findViewById(android.R.id.content),
-                    R.string.err_not_hap_file,
-                    com.google.android.material.snackbar.Snackbar.LENGTH_SHORT
-                ).show()
-                return
-            }
-            previewAndInstallHap(uri)
-        }
-    }
-
-    private fun queryFileName(uri: Uri): String? {
-        val cursor = contentResolver.query(uri, null, null, null, null)
-        return cursor?.use {
-            if (it.moveToFirst()) {
-                val idx = it.getColumnIndex(android.provider.OpenableColumns.DISPLAY_NAME)
-                if (idx >= 0) it.getString(idx) else null
-            } else null
-        }
-    }
-
-    private fun previewAndInstallHap(uri: Uri) {
-        installButton.isEnabled = false
-        installButton.text = getString(R.string.btn_extracting)
-
-        Thread {
-            try {
-                val tmpFile = java.io.File(cacheDir, "hap_preview_${System.currentTimeMillis()}")
-                contentResolver.openInputStream(uri)?.use { input ->
-                    tmpFile.outputStream().use { out -> input.copyTo(out) }
-                } ?: throw IllegalStateException("Cannot open selected file")
-
-                var hapPath: String
-                var config: app.hackeris.hoa.hap.ModuleConfig
-                try {
-                    config = HapBundleLoader().previewConfig(tmpFile.absolutePath)
-                    hapPath = tmpFile.absolutePath
-                } catch (e: app.hackeris.hoa.hap.HapParseException) {
-                    if (!HapBundleLoader().isAppPackage(tmpFile.absolutePath)) throw e
-                    hapPath = HapBundleLoader().unwrapSingleHap(tmpFile.absolutePath)
-                    tmpFile.delete()
-                    config = HapBundleLoader().previewConfig(hapPath)
-                }
-
-                val finalHapPath = hapPath
-                runOnUiThread {
-                    installButton.isEnabled = true
-                    installButton.text = getString(R.string.btn_install_hap)
-                    showInstallPreviewDialog(java.io.File(finalHapPath), config)
-                }
-            } catch (e: Exception) {
-                LogWriter.e(TAG, "HAP preview failed", e)
-                runOnUiThread {
-                    Toast.makeText(
-                        this, getString(R.string.toast_install_failed_fmt, e.message), Toast.LENGTH_LONG
-                    ).show()
-                    installButton.isEnabled = true
-                    installButton.text = getString(R.string.btn_install_hap)
-                }
-            }
-        }.start()
-    }
-
-    private fun showInstallPreviewDialog(
-        tmpFile: java.io.File, config: app.hackeris.hoa.hap.ModuleConfig
-    ) {
-        val sb = StringBuilder()
-
-        fun row(label: String, value: String) {
-            sb.append(label).append(": ").append(value).append("\n")
-        }
-
-        row(getString(R.string.label_bundle_name), config.bundleName.ifEmpty { "—" })
-        row(getString(R.string.label_module),
-            "${config.name} (${config.type})")
-        row(getString(R.string.label_version),
-            "${config.versionName} (${config.versionCode})")
-        row(getString(R.string.label_sdk),
-            "target=${config.targetApiVersion}  min=${config.minApiVersion}")
-
-        if (config.requestPermissions.isNotEmpty()) {
-            sb.append("\n").append(getString(R.string.label_permissions))
-                .append(" (").append(config.requestPermissions.size).append("):\n")
-            config.requestPermissions.forEach { sb.append("  • ").append(it).append("\n") }
-        }
-
-        if (config.abilities.isNotEmpty()) {
-            sb.append("\n").append(getString(R.string.label_abilities))
-                .append(" (").append(config.abilities.size).append("):\n")
-            config.abilities.forEach { a ->
-                sb.append("  • ").append(a.name).append(" (").append(a.type).append(")\n")
-            }
-        }
-
-        val contentView = android.widget.TextView(this).apply {
-            text = sb.toString().trimEnd()
-            textSize = 14f
-            @Suppress("DEPRECATION")
-            setTextColor(getColor(android.R.color.primary_text_light))
-            setPadding(40, 24, 40, 8)
-            setLineSpacing(4f, 1f)
-        }
-        val scrollView = android.widget.ScrollView(this).apply {
-            addView(contentView)
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.dialog_install_preview_title))
-            .setView(scrollView)
-            .setPositiveButton(getString(R.string.btn_install)) { _, _ ->
-                doInstall(tmpFile)
-            }
-            .setNegativeButton(android.R.string.cancel) { _, _ ->
-                tmpFile.delete()
-            }
-            .setOnCancelListener { tmpFile.delete() }
-            .show()
-    }
-
-    private fun doInstall(tmpFile: java.io.File) {
-        installButton.isEnabled = false
-        installButton.text = getString(R.string.btn_installing)
-
-        Thread {
-            try {
-                val result = installer.install(tmpFile.absolutePath)
-                runOnUiThread {
-                    Toast.makeText(
-                        this, getString(R.string.toast_installed_fmt, result.bundleName), Toast.LENGTH_SHORT
-                    ).show()
-                    refreshHapList()
-                    installButton.isEnabled = true
-                    installButton.text = getString(R.string.btn_install_hap)
-                }
-            } catch (e: Exception) {
-                LogWriter.e(TAG, "HAP install failed", e)
-                runOnUiThread {
-                    Toast.makeText(
-                        this, getString(R.string.toast_install_failed_fmt, e.message), Toast.LENGTH_LONG
-                    ).show()
-                    installButton.isEnabled = true
-                    installButton.text = getString(R.string.btn_install_hap)
-                }
-            } finally {
-                tmpFile.delete()
-            }
-        }.start()
-    }
-
-    private fun openDetailPage(hap: InstalledHap) {
-        val intent = Intent(this, HapDetailActivity::class.java).apply {
-            putExtra("BUNDLE_NAME", hap.bundleName)
-            putExtra("MODULE_NAME", hap.moduleName)
-            putExtra("ABILITY_NAME", hap.mainAbility)
-        }
-        startActivity(intent)
-    }
-
-    private fun launchHap(hap: InstalledHap) {
-        if (ProcessSlotManager.launchHap(this, hap.bundleName, hap.moduleName, hap.mainAbility) < 0) {
-            AlertDialog.Builder(this)
-                .setTitle(getString(R.string.dialog_no_slots_title))
-                .setMessage(getString(R.string.dialog_no_slots_msg, ProcessSlotManager.MAX_SLOTS))
-                .setPositiveButton(android.R.string.ok, null)
-                .show()
-        }
-    }
-
-    private fun showLongPressMenu(anchor: View, hap: InstalledHap) {
-        val popup = android.widget.PopupMenu(this, anchor)
-        popup.menu.add(0, MENU_APP_INFO, 0, getString(R.string.btn_app_info))
-        popup.menu.add(0, MENU_ADD_TO_HOME, 1, getString(R.string.btn_add_to_home))
-        popup.menu.add(0, MENU_UNINSTALL, 2, getString(R.string.btn_uninstall))
-        popup.setOnMenuItemClickListener { item ->
-            when (item.itemId) {
-                MENU_APP_INFO -> openDetailPage(hap)
-                MENU_ADD_TO_HOME -> pinShortcut(hap)
-                MENU_UNINSTALL -> confirmUninstall(hap)
-            }
-            true
-        }
-        popup.show()
-    }
-
-    private fun confirmUninstall(hap: InstalledHap) {
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.dialog_uninstall_title))
-            .setMessage(getString(R.string.dialog_uninstall_msg, hap.bundleName, hap.moduleName))
-            .setPositiveButton(getString(R.string.btn_uninstall)) { _, _ ->
-                installer.uninstall(hap.bundleName)
-                refreshHapList()
-                Toast.makeText(this, getString(R.string.toast_uninstalled_fmt, hap.bundleName), Toast.LENGTH_SHORT).show()
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun pinShortcut(hap: InstalledHap) {
-        val label = HapBundleLoader.resolveLabel(hap.contentDir, hap.moduleConfig)
-        val shortcutId = "${hap.bundleName}.${hap.moduleName}.${hap.mainAbility}"
-
-        Thread {
-            val icon = loadHapIconBitmap(hap)
-            runOnUiThread {
-                val intent = Intent(this, HoaShortcutActivity::class.java).apply {
-                    putExtra("BUNDLE_NAME", hap.bundleName)
-                    putExtra("MODULE_NAME", hap.moduleName)
-                    putExtra("ABILITY_NAME", hap.mainAbility)
-                    action = Intent.ACTION_VIEW
-                }
-
-                val builder = ShortcutInfo.Builder(this, shortcutId)
-                    .setShortLabel(label)
-                    .setLongLabel(label)
-                    .setIntent(intent)
-                if (icon != null) {
-                    builder.setIcon(Icon.createWithBitmap(icon))
-                }
-                val shortcut = builder.build()
-
-                val manager = getSystemService(ShortcutManager::class.java)
-                if (manager != null && manager.isRequestPinShortcutSupported) {
-                    // requestPinShortcut requires the shortcut to be a dynamic
-                    // shortcut first.  Once called, the system serialises the
-                    // shortcut data into the pin-confirmation dialog — it won't
-                    // re-query the dynamic list, so we can remove it immediately
-                    // to keep the long-press menu clean.
-                    manager.addDynamicShortcuts(listOf(shortcut))
-                    manager.requestPinShortcut(shortcut, null)
-                    manager.removeDynamicShortcuts(listOf(shortcutId))
-                    Toast.makeText(
-                        this, getString(R.string.toast_shortcut_pinned_fmt, label), Toast.LENGTH_SHORT
-                    ).show()
-                } else {
-                    Toast.makeText(
-                        this, getString(R.string.toast_shortcut_pin_failed), Toast.LENGTH_SHORT
-                    ).show()
-                }
-            }
-        }.start()
-    }
-
-    // Loads the HAP icon bitmap for the shortcut.
-    private fun loadHapIconBitmap(hap: InstalledHap): android.graphics.Bitmap? {
-        return HapBundleLoader.loadHapIcon(hap.contentDir, hap.moduleConfig)
-    }
-
-    private inner class HapListAdapter : BaseAdapter() {
-        // Cache decoded HAP icons to avoid re-reading module.json and
-        // re-decoding bitmaps on every getView() call.  The cache is small
-        // (< 10 entries) and cleared when refreshHapList() replaces this adapter.
-        private val iconCache = mutableMapOf<String, android.graphics.Bitmap?>()
-        // Cache resolved display labels to avoid re-scanning resources.index.
-        private val labelCache = mutableMapOf<String, String>()
-
-        override fun getCount() = installedHaps.size
-        override fun getItem(position: Int) = installedHaps[position]
-        override fun getItemId(position: Int) = position.toLong()
-
-        override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
-            val view = convertView ?: layoutInflater.inflate(R.layout.item_hap, parent, false)
-            val hap = installedHaps[position]
-
-            val cacheKey = "${hap.bundleName}.${hap.moduleName}"
-            val displayLabel = labelCache.getOrPut(cacheKey) {
-                HapBundleLoader.resolveLabel(hap.contentDir, hap.moduleConfig)
-            }
-            view.findViewById<TextView>(R.id.hap_bundle_name).text = displayLabel
-            view.findViewById<TextView>(R.id.hap_module_info).text =
-                "${hap.moduleName} | ${hap.moduleConfig.type} | v${hap.moduleConfig.versionName}"
-            view.findViewById<TextView>(R.id.hap_ability_info).text =
-                if (hap.mainAbility.isNotBlank()) getString(R.string.label_ability_fmt, hap.mainAbility) else getString(R.string.label_no_ability)
-
-            val iconView = view.findViewById<android.widget.ImageView>(R.id.hap_icon)
-            val cached = iconCache[cacheKey]
-            if (cached != null || iconCache.containsKey(cacheKey)) {
-                iconView.setImageBitmap(cached)
-            } else {
-                iconView.setImageResource(android.R.drawable.sym_def_app_icon)
-                Thread {
-                    val bitmap = loadHapIcon(hap)
-                    iconCache[cacheKey] = bitmap
-                    runOnUiThread {
-                        if (installedHaps.getOrNull(position) == hap) {
-                            iconView.setImageBitmap(bitmap)
-                        }
-                    }
-                }.start()
-            }
-
-            return view
-        }
-
-        private fun loadHapIcon(hap: InstalledHap): android.graphics.Bitmap? {
-            return HapBundleLoader.loadHapIcon(hap.contentDir, hap.moduleConfig)
-        }
-    }
-
-    private fun showPermissionsDialog() {
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.dialog_permissions_title))
-            .setMessage(getString(R.string.dialog_permissions_msg))
-            .setPositiveButton(getString(R.string.dialog_permissions_go)) { _, _ ->
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = android.net.Uri.parse("package:$packageName")
-                }
-                startActivity(intent)
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun showFeedbackDialog() {
-        val items = arrayOf(
-            getString(R.string.dialog_feedback_export_logs),
-            getString(R.string.dialog_feedback_gitcode),
-            getString(R.string.dialog_feedback_github)
-        )
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.dialog_feedback_title))
-            .setItems(items) { _, which ->
-                when (which) {
-                    0 -> {
-                        Toast.makeText(this, getString(R.string.toast_logs_exporting), Toast.LENGTH_SHORT).show()
-                        LogCollector.export(
-                            this,
-                            onComplete = { path ->
-                                runOnUiThread {
-                                    AlertDialog.Builder(this)
-                                        .setTitle(getString(R.string.toast_logs_exported))
-                                        .setMessage(path)
-                                        .setPositiveButton(getString(R.string.dialog_share)) { _, _ ->
-                                            LogCollector.share(this, path)
-                                        }
-                                        .setNegativeButton(android.R.string.ok, null)
-                                        .show()
-                                }
-                            },
-                            onError = { error ->
-                                runOnUiThread {
-                                    Toast.makeText(this, getString(R.string.toast_logs_export_failed, error), Toast.LENGTH_LONG).show()
-                                }
-                            }
-                        )
-                    }
-                    1 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://gitcode.com/harmony-on-android/HOA/issues")))
-                    2 -> startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://github.com/harmony-on-android/HOA/issues")))
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun toggleHdc(item: android.view.MenuItem) {
-        if (isHdcRunning()) {
-            stopService(Intent(this, HdcService::class.java))
-            item.setTitle(R.string.menu_hdc_start)
-            Toast.makeText(this, R.string.toast_hdc_stopped, Toast.LENGTH_SHORT).show()
-        } else {
-            showHdcPortDialog { port ->
-                val prefs = getSharedPreferences("hoa_prefs", MODE_PRIVATE)
-                prefs.edit().putInt(HdcService.KEY_PORT, port).apply()
-                val intent = Intent(this, HdcService::class.java)
-                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
-                    startForegroundService(intent)
-                } else {
-                    startService(intent)
-                }
-                item.setTitle(R.string.menu_hdc_stop)
-                Toast.makeText(this, getString(R.string.toast_hdc_started, port), Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun showHdcPortDialog(onStart: (Int) -> Unit) {
-        val prefs = getSharedPreferences("hoa_prefs", MODE_PRIVATE)
-        val currentPort = prefs.getInt(HdcService.KEY_PORT, DEFAULT_PORT)
-        val input = android.widget.EditText(this).apply {
-            inputType = android.text.InputType.TYPE_CLASS_NUMBER
-            setText(currentPort.toString())
-            setSelection(text.length)
-        }
-        val px16 = (16 * resources.displayMetrics.density).toInt()
-        val container = android.widget.FrameLayout(this).apply {
-            setPadding(px16, 0, px16, 0)
-            addView(input)
-        }
-        AlertDialog.Builder(this)
-            .setTitle(R.string.dialog_hdc_port_title)
-            .setMessage(R.string.dialog_hdc_port_msg)
-            .setView(container)
-            .setPositiveButton(android.R.string.ok) { _, _ ->
-                val port = input.text.toString().toIntOrNull()
-                if (port != null && port in 1024..65535) {
-                    onStart(port)
-                } else {
-                    Toast.makeText(this, R.string.toast_hdc_invalid_port, Toast.LENGTH_SHORT).show()
-                }
-            }
-            .setNegativeButton(android.R.string.cancel, null)
-            .show()
-    }
-
-    private fun isHdcRunning(): Boolean {
-        val manager = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-        for (service in manager.getRunningServices(Int.MAX_VALUE)) {
-            if (HdcService::class.java.name == service.service.className) {
-                return true
-            }
-        }
-        return false
     }
 
     companion object {
         private const val TAG = "HOA.Main"
-        private const val REQUEST_PICK_HAP = 1001
-        private const val MENU_APP_INFO = 1
-        private const val MENU_ADD_TO_HOME = 2
-        private const val MENU_UNINSTALL = 3
     }
 }
+
+@Composable
+private fun HoaRoot(
+    initialUri: Uri?,
+    onRefreshHandlerReady: ((() -> Unit)?) -> Unit,
+) {
+    val context = LocalContext.current
+    val vm: HoaViewModel = viewModel()
+    val items by vm.items.collectAsState()
+    val busy by vm.busy.collectAsState()
+    val preview by vm.preview.collectAsState()
+
+    var selectedTab by rememberSaveable { mutableIntStateOf(0) }
+    val prefs = remember { context.getSharedPreferences("hoa_prefs", Context.MODE_PRIVATE) }
+    var sortMode by remember {
+        mutableStateOf(
+            runCatching { SortMode.valueOf(prefs.getString(KEY_SORT, SortMode.TIME_ASC.name)!!) }
+                .getOrDefault(SortMode.TIME_ASC)
+        )
+    }
+
+    val snackbarHostState = remember { SnackbarHostState() }
+
+    LaunchedEffect(Unit) {
+        onRefreshHandlerReady { vm.refresh() }
+        vm.refresh()
+    }
+
+    // 一次性提示（安装结果 / 槽位已满等）
+    LaunchedEffect(Unit) {
+        vm.events.collect { message ->
+            snackbarHostState.showSnackbar(message, duration = SnackbarDuration.Short)
+        }
+    }
+
+    val picker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) vm.previewFromUri(uri)
+    }
+
+    LaunchedEffect(Unit) {
+        // 从文件管理器 / 分享进来的 HAP
+        val main = context as? MainActivity
+        main?.let { activity ->
+            activity.setOpenUriHandler { uri -> vm.previewFromUri(uri) }
+        }
+        initialUri?.let { vm.previewFromUri(it) }
+    }
+
+    // 首次启动免责声明
+    var showDisclaimer by remember {
+        mutableStateOf(!prefs.getBoolean(KEY_FIRST_LAUNCH, false))
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        HoaMainScreen(
+            selectedTab = selectedTab,
+            onTabChange = { selectedTab = it },
+            items = items,
+            busy = busy,
+            sortMode = sortMode,
+            onSortChange = { mode ->
+                sortMode = mode
+                prefs.edit().putString(KEY_SORT, mode.name).apply()
+            },
+            onInstallClick = { picker.launch(arrayOf("*/*")) },
+            onLaunch = { hap -> vm.launch(hap) },
+            onUninstall = { hap -> vm.uninstall(hap) },
+            onPin = { item -> vm.pinShortcut(item) },
+            onAppInfo = { hap ->
+                context.startActivity(
+                    Intent(context, HapDetailActivity::class.java).apply {
+                        putExtra("BUNDLE_NAME", hap.bundleName)
+                        putExtra("MODULE_NAME", hap.moduleName)
+                        putExtra("ABILITY_NAME", hap.mainAbility)
+                    }
+                )
+            },
+        )
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(bottom = 96.dp),
+            verticalArrangement = Arrangement.Bottom,
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            SnackbarHost(state = snackbarHostState)
+        }
+    }
+
+    preview?.let { pending ->
+        InstallPreviewDialog(
+            preview = pending,
+            onConfirm = { vm.confirmInstall() },
+            onDismiss = { vm.dismissPreview() },
+        )
+    }
+
+    if (showDisclaimer) {
+        WindowDialog(
+            show = true,
+            onDismissRequest = { },
+            title = stringResource(R.string.first_launch_title),
+            summary = stringResource(R.string.first_launch_msg),
+            content = {
+                TextButton(
+                    text = stringResource(R.string.first_launch_btn),
+                    onClick = {
+                        prefs.edit().putBoolean(KEY_FIRST_LAUNCH, true).apply()
+                        showDisclaimer = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        )
+    }
+}
+
+@Composable
+private fun InstallPreviewDialog(
+    preview: InstallPreview,
+    onConfirm: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val config: ModuleConfig = preview.config
+    WindowDialog(
+        show = true,
+        onDismissRequest = onDismiss,
+        title = stringResource(R.string.dialog_install_preview_title),
+        summary = config.bundleName,
+        content = {
+            Column(
+                modifier = Modifier
+                    .heightIn(max = 420.dp)
+                    .verticalScroll(rememberScrollState())
+            ) {
+                PreviewRow(stringResource(R.string.label_bundle_name), config.bundleName.ifEmpty { "—" })
+                PreviewRow(stringResource(R.string.label_module), "${config.name} (${config.type})")
+                PreviewRow(
+                    stringResource(R.string.label_version),
+                    "${config.versionName} (${config.versionCode})"
+                )
+                PreviewRow(
+                    stringResource(R.string.label_sdk),
+                    "target=${config.targetApiVersion}  min=${config.minApiVersion}"
+                )
+                if (config.requestPermissions.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "${stringResource(R.string.label_permissions)} (${config.requestPermissions.size})",
+                        style = textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    config.requestPermissions.forEach { permission ->
+                        Text(
+                            text = "• $permission",
+                            style = textStyles.footnote2,
+                            color = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+                if (config.abilities.isNotEmpty()) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = "${stringResource(R.string.label_abilities)} (${config.abilities.size})",
+                        style = textStyles.footnote1,
+                        color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+                    )
+                    config.abilities.forEach { ability ->
+                        Text(
+                            text = "• ${ability.name} (${ability.type})",
+                            style = textStyles.footnote2,
+                            color = MiuixTheme.colorScheme.onSurface,
+                        )
+                    }
+                }
+            }
+            Spacer(Modifier.height(14.dp))
+            Row {
+                TextButton(
+                    text = stringResource(R.string.cancel),
+                    onClick = onDismiss,
+                    modifier = Modifier.weight(1f),
+                )
+                Spacer(Modifier.width(16.dp))
+                TextButton(
+                    text = stringResource(R.string.btn_install),
+                    onClick = onConfirm,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    )
+}
+
+@Composable
+private fun PreviewRow(label: String, value: String) {
+    Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
+        Text(
+            text = label,
+            style = textStyles.footnote1,
+            color = MiuixTheme.colorScheme.onSurfaceVariantSummary,
+            modifier = Modifier.width(96.dp),
+        )
+        Text(
+            text = value,
+            style = textStyles.footnote1,
+            color = MiuixTheme.colorScheme.onSurface,
+        )
+    }
+}
+
+private const val KEY_SORT = "main_sort_mode"
+private const val KEY_FIRST_LAUNCH = "first_launch_done"

@@ -1,5 +1,7 @@
 package app.hackeris.hoa.hdc
 
+import app.hackeris.hoa.device.DeviceProfile
+import app.hackeris.hoa.device.DeviceProfileStore
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
@@ -71,6 +73,10 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
         val paramGet = Regex("^param get (\\S+)")
         paramGet.find(command)?.let { match ->
             val key = match.groupValues[1]
+            // 机型信息跟随用户在设置页选择的模拟机型，DevEco 看到的和 HAP 内一致。
+            val profile = daemon.getApplicationContext()
+                ?.let { DeviceProfileStore.load(it) }
+                ?: DeviceProfile.system()
             return when (key) {
                 "const.ohos.apiversion" -> "26"
                 "const.ohos.apiminorversion" -> "0"
@@ -79,14 +85,20 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
                 "const.ohos.releasetype" -> "Release"
                 "const.ohos.sdkapiversion" -> "26"
                 "const.ohos.majorversion" -> "7"
-                "const.product.model" -> "HOA-01"
-                "const.product.name" -> "HOA"
-                "const.product.brand" -> "HOA"
-                "const.product.manufacturer" -> "HOA"
-                "const.product.devicetype" -> "phone"
-                "const.product.software.version" -> "7.0.0"
+                "const.product.model" -> profile.model
+                "const.product.name" -> profile.product
+                "const.product.brand" -> profile.brand
+                "const.product.manufacturer" -> profile.manufacturer
+                "const.product.devicetype" -> profile.deviceType
+                "const.build.product" -> profile.product
+                "ro.product.model" -> profile.model
+                "ro.product.name" -> profile.product
+                "ro.product.brand" -> profile.brand
+                "ro.product.manufacturer" -> profile.manufacturer
+                "ro.product.device" -> profile.device
+                "ro.product.board" -> profile.board
+                "const.product.software.version" -> profile.osVersion
                 "const.product.hardware.version" -> "1.0.0"
-                "const.build.product" -> "HOA"
                 "const.os.distributedsupport" -> "false"
                 "const.telephony.enabled" -> "false"
                 "const.wifi.direct.network.type" -> "0"
