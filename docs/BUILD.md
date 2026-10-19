@@ -186,6 +186,8 @@ ARKUI_BUILD=~/arkui-x-hoa/out/arkui-x/aosp_clang_arm64_release ./scripts/sync_ar
 
 前提是 Step 5 已经把 ArkUI-X 产物同步进来，`app/src/main/jniLibs/arm64-v8a/libarkui_android.so` 与 `app/libs/arkui_android_adapter.jar` 必须存在——CMake 里的 `-larkui_android` 直接以它为链接目标，缺了会在 `ninja` 阶段报 `unable to find library -larkui_android`。
 
+> 如果你之前放过 `app/libs/arkui_android_adapter_stub.jar`（只有 3 个空壳类，仅供没有产物时编译通过），拿到真的 `arkui_android_adapter.jar` 之后**先删掉桩**，否则两个 jar 里有同名类，dex 阶段会报 duplicate class。
+
 ```bash
 ./gradlew assembleDebug
 ```
