@@ -2,7 +2,7 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Project: HOA — Harmony on Android
+## Project: Harmoid — Harmony on Android
 
 在 Android 设备上运行 OpenHarmony/HarmonyOS HAP 应用。通过 ArkUI-X 的 Android 构建体系 + musl ABI bridge (libb.so) 使 OHOS 闭源 .so 能在 Android bionic 上运行。
 
@@ -21,7 +21,7 @@ HAP (.hap, ZIP format)
          ▼ HapInstaller: ZIP解压 → ELF patch (libc.so→libb.so) → 拓扑依赖加载
          │
 ┌─────────────────────────────────────────────┐
-│ HOA Application (Android)                   │
+│ Harmoid Application (Android)                   │
 │  ├── StageApplication       ArkUI-X 适配器  │
 │  ├── libarkui_android.so    内嵌 ETS VM     │
 │  ├── libb.so               musl ABI bridge  │  ← 关键组件
@@ -50,6 +50,54 @@ HAP (.hap, ZIP format)
 | APK CMake (`CMakeLists.txt`) | 3 | libace_napi.z.so, libhilog_ndk.z.so, libohaudio.so (NDK 21) |
 
 所有 .so 置于 `app/src/main/jniLibs/arm64-v8a/`，打包进 APK。
+
+### OHOS 系统 API 模拟层 (ArkUI-X Plugins)
+
+ArkUI-X 把 `@ohos.xxx` 拆成两半：`.so` 在 APK 里（`app/src/main/jniLibs/arm64-v8a/`），但每个 `.so` 的构造
+函数都会 `ARKUI_X_Plugin_RegisterJavaPlugin()` → `ohos.ace.adapter.capability.plugin.PluginManager.initPlugin()`
+→ 反射 `Class.forName("ohos.ace.plugin.xxx.XxxPlugin")` 找 **Java 实现**。上游 Harmoid 只编了
+`ohos.ace.adapter.*`（jar），缺了整个 `ohos.ace.plugin.*`，于是 HAP 一 `import deviceInfo` 就
+`ClassNotFoundException`（实测 logcat：`hap_verify4.txt`）。
+
+补齐方式：从 `https://github.com/arkui-x/plugins` 取官方插件 Java 源码，放进
+`app/src/main/java/ohos/ace/plugin/`（21 个包、69 个文件），随 APK 一起编译进 dex。
+native 侧期望的契约是「类名 + `public Xxx(Context)` 构造」，已全部对齐：
+
+| .so | Java 插件类 |
+|---|---|
+| libdeviceinfo | `device_infoplugin.DeviceInfoPlugin` |
+| libnotificationmanager | `notificationmanager.NotificationPlugin` |
+| libvibrator | `vibratorplugin.VibratorPlugin` |
+| libpasteboard | `clipboard.ClipboardAosp` |
+| libnet_connection | `netconnclientplugin.NetConnClientPlugin` |
+| libnet_http | `httpplugin.HttpPlugin` |
+| libmultimedia_audio | `audiocapturer/audiomanager/audiorenderer` |
+| libmultimedia_media | `playerplugin/recorderplugin/avmetadatahelperplugin` |
+| libbluetooth_common | `bluetoothplugin.BluetoothPlugin` |
+| libcommoneventmanager | `broadcastplugin.BroadcastPlugin` |
+| libwifimanager | `wifimanager.WifiDevicePlugin` |
+| libi18n / libintl / libsystemdatetime | `i18nplugin` / `intlplugin` / `timeplugin` |
+| libgeolocationmanager | `locationserviceplugin.LocationServicePlugin` |
+| libfile_picker / libfile_photoaccesshelper | `file.fs.picker.filepicker` / `photoaccesshelper` |
+| libweb_webview | `webviewplugin.*` |
+| librequest / libutil / libabilityaccessctrl | `taskmanagerplugin` / `utilplugin` / `abilityaccessctrl` |
+
+未覆盖：`libuitest.so` 的 `display/screencapture/touchinject`（UI 测试专用，运行时不需要）。
+
+### Harmoid 桥接层
+
+`app/src/main/java/com/kira/harmoid/bridge/` 把 Android 侧事件回灌给 HAP：
+
+- **`HapSession`** — `:hapN` 进程内记录当前 HAP 身份（bundle/module/ability/slot），并生成
+  ArkUI-X `WantParams` JSON 与启动 Intent。
+- **`HarmoidNotificationBridge`** — 官方 `NotificationPlugin` 发的通知**没有** contentIntent（点了没反应）。
+  这里补上点击/清除 PendingIntent → `HoaAbilityActivity{N}`（singleTop）→ `StageActivity.onNewIntent()`
+  → `dispatchOnNewWant()` → ArkTS `onNewWant(want)`。
+- **`HarmoidMediaBridge`** — HAP 用 `@ohos.multimedia.media` 播歌时只是裸 `MediaPlayer`，Android 看不见。
+  这里建 `MediaSession` + MediaStyle 通知，并把系统控件的 play/pause/stop/seek **回灌**给
+  `PlayerPlugin.getInstance()`，ArkTS 侧照常收到状态回调。
+- **实况窗 (Live Update)** — `NotificationRequest.liveView` 或 `isOngoing + progressMax>0` 时，
+  API 36+ 用 `Notification.ProgressStyle` 渲染成 Android 16 Live Update，低版本回退 `setProgress()`。
 
 ---
 
@@ -112,7 +160,7 @@ malloc/free 入口
 | `app/CMakeLists.txt` | APK CMake: 3 个 stub .so (NDK 21) |
 | `app/build.gradle.kts` | APK 构建配置 (版本号、依赖、NDK 配置) |
 | `scripts/build_all.sh` | 一键构建 (ArkUI-X→libb.so→sync→APK) |
-| `scripts/sync_arkui_x.sh` | 从 ArkUI-X 产物同步到 HOA |
+| `scripts/sync_arkui_x.sh` | 从 ArkUI-X 产物同步到 Harmoid |
 | `scripts/setup_arkui_x.sh` | 首次 ArkUI-X 源码下载 (repo init/sync) |
 | `manifests/hoa-weekly.xml` | repo manifest: 8 个定制仓库 override |
 
@@ -193,23 +241,23 @@ cd $ARKUI_X_SRC && bash build/prebuilts_download.sh --build-arkuix --skip-ssl
 ./gradlew testDebugUnitTest
 
 # 单个测试类
-./gradlew testDebugUnitTest --tests "app.hackeris.hoa.hap.HapBundleLoaderTest"
+./gradlew testDebugUnitTest --tests "com.kira.harmoid.hap.HapBundleLoaderTest"
 
 # 单个测试方法
-./gradlew testDebugUnitTest --tests "app.hackeris.hoa.hap.HapBundleLoaderTest.parse_moduleConfig"
+./gradlew testDebugUnitTest --tests "com.kira.harmoid.hap.HapBundleLoaderTest.parse_moduleConfig"
 ```
 
 ### DevTestActivity — 快速验证 HAP
 
 ```bash
 # 安装并启动 HAP
-adb shell am force-stop app.hackeris.hoa
-adb shell am start -n app.hackeris.hoa/.DevTestActivity \
+adb shell am force-stop com.kira.harmoid
+adb shell am start -n com.kira.harmoid/.DevTestActivity \
     -e installHapPath /data/local/tmp/zbox.hap \
     --ez autoLaunch true
 
 # 查看日志
-adb logcat -d | grep -iE "(HOA|DevTest|DOSBox|SIGABRT|SIGSEGV|malloc_bridge)"
+adb logcat -d | grep -iE "(Harmoid|DevTest|DOSBox|SIGABRT|SIGSEGV|malloc_bridge)"
 ```
 
 ---
@@ -229,7 +277,7 @@ versionCode = YYMMDDBB    (年年月月日日次次，共 9 位)
 
 ## HDC (HarmonyOS Device Connector)
 
-HOA 实现了 OHOS HDC daemon（TCP 8710 端口），使 DevEco Studio 可将 HOA 设备识别为 OHOS 设备并一键部署 HAP。
+Harmoid 实现了 OHOS HDC daemon（TCP 8710 端口），使 DevEco Studio 可将 Harmoid 设备识别为 OHOS 设备并一键部署 HAP。
 
 | 文件 | 职责 |
 |------|------|
@@ -248,7 +296,7 @@ HOA 实现了 OHOS HDC daemon（TCP 8710 端口），使 DevEco Studio 可将 HO
 ## 已知问题
 
 1. **DOSBox-X (zbox) 堆内存破坏 (2026-06-06 深度诊断)**:
-   - **现象**: zbox 在 HOA 上崩溃率 ~85-100%，崩溃位置随机（libbinder、libc.so strcasecmp、libarkui_android.so、jemalloc extent tree 等）
+   - **现象**: zbox 在 Harmoid 上崩溃率 ~85-100%，崩溃位置随机（libbinder、libc.so strcasecmp、libarkui_android.so、jemalloc extent tree 等）
    - **根因**: zbox 自身存在 double-free 和 use-after-free 问题（非 buffer overflow），通过 `malloc_bridge.c` 中 `-DMALLOC_CANARY_DEBUG` 的 heap canary 检测到 FRONT canary 被破坏（值出现 0xffffffffffffffff、0x0000000000000001 等），但 TAIL canary 从未被触发
    - **排除 libb.so**: 15/15 次崩溃中 libb.so 仅在 #15 帧作为线程入口出现，不在任何活跃崩溃栈中。jemalloc extent tree 崩溃表明堆元数据被 zbox 代码破坏
    - **诊断工具**: `malloc_bridge.c` 内置 `MALLOC_CANARY_DEBUG` 宏，启用后每个 malloc/free 加 header+footer canary，在 free 时检测 double-free、underflow、overflow。启用方式：`Makefile.musl_bridge` 的 `CFLAGS_BRIDGE` 添加 `-DMALLOC_CANARY_DEBUG`
@@ -268,7 +316,7 @@ HOA 实现了 OHOS HDC daemon（TCP 8710 端口），使 DevEco Studio 可将 HO
 
 ## Git 仓库
 
-- **HOA**: `dev` 分支，remote origin
+- **Harmoid**: `dev` 分支，remote origin
 - **ArkUI-X**: `$ARKUI_X_SRC`，remote `openharmony`
 - **ArkUI-X manifest**: `harmony-on-android/manifest`，branch `hoa-weekly` — 管理 8 个定制仓库 (ets_runtime, build, appframework, ace_engine/adapter/android, arkui/napi, plugins, musl, build_plugins)
 

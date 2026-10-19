@@ -337,6 +337,94 @@
 
 ---
 
+## 四点五、Java 插件层补齐（2026-10-19 logcat 实测）
+
+### 发现
+
+之前统计的"已实现插件 (.so) ~152 个"是**只数了 `.so`，没数 Java 类**。ArkUI-X 的插件是成对存在的：
+
+```
+.so 的 __attribute__((constructor))
+  → ARKUI_X_Plugin_RegisterJavaPlugin(&XxxJni::Register, "ohos.ace.plugin.xxx.XxxPlugin")
+  → ohos.ace.adapter.capability.plugin.PluginManager.registerPlugin(func, className)
+  → nativeRegister → XxxJni::Register(): FindClass(className) + RegisterNatives
+  → PluginManager.initPlugin(className): Class.forName(...).getConstructor(Context.class).newInstance(context)
+```
+
+HOA 的 `arkui_android_adapter.jar` 只编了 `ohos.ace.adapter.*`，**整个 `ohos.ace.plugin.*` 一个都没有**。
+于是 HAP 一 `import deviceInfo from '@ohos.deviceInfo'`，logcat 就是：
+
+```
+Request module is @ohos:deviceInfo
+LoadModuleLibrary ... libdeviceinfo.so
+DeviceInfoRegisterModule / DeviceInfoPluginJniRegister
+DeviceInfoJni JNI: Register
+DeviceInfoJni JNI: call Register has exception ohos/ace/plugin/device_infoplugin/DeviceInfoPlugin
+  java.lang.ClassNotFoundException: Didn't find class "ohos.ace.plugin.device_infoplugin.DeviceInfoPlugin"
+PluginManager NativeRegister JNI: register failed
+```
+
+`.so` 找到了，`RegisterNatives` 失败 → Java 对象建不出来 → **`getDeviceInfo()` 全部返回默认值，HAP 拿到空设备信息**。
+
+### 修复
+
+官方插件 Java 源码在**独立仓库** `https://github.com/arkui-x/plugins`（不在 arkui-x 主仓里，
+`plugins/` 子目录只是 gni 引用）。把 21 个包 / 69 个 Java 文件拷进
+`app/src/main/java/ohos/ace/plugin/`，随 APK 编进 dex。
+
+契约只有两条：类名要和 `.so` 里的字符串完全一致；要有 `public Xxx(Context context)` 构造。
+
+### `.so` ↔ Java 类映射
+
+| .so | Java 插件类 | OHOS API |
+|---|---|---|
+| `libdeviceinfo.so` | `device_infoplugin.DeviceInfoPlugin` | `@ohos.deviceInfo` |
+| `libnotificationmanager.so` | `notificationmanager.NotificationPlugin` | `@ohos.notificationManager` |
+| `libvibrator.so` | `vibratorplugin.VibratorPlugin` | `@ohos.vibrator` |
+| `libpasteboard.so` | `clipboard.ClipboardAosp` | `@ohos.pasteboard` |
+| `libnet_connection.so` | `netconnclientplugin.NetConnClientPlugin` | `@ohos.net.connection` |
+| `libnet_http.so` | `httpplugin.HttpPlugin` | `@ohos.net.http` |
+| `libmultimedia_audio.so` | `audiocapturer` / `audiomanager` / `audiorenderer` | `@ohos.multimedia.audio` |
+| `libmultimedia_media.so` | `playerplugin` / `recorderplugin` / `avmetadatahelperplugin` | `@ohos.multimedia.media` |
+| `libbluetooth_common.so` | `bluetoothplugin.BluetoothPlugin` | `@ohos.bluetooth` |
+| `libcommoneventmanager.so` | `broadcastplugin.BroadcastPlugin` | `@ohos.commonEventManager` |
+| `libwifimanager.so` | `wifimanager.WifiDevicePlugin` | `@ohos.wifiManager` |
+| `libi18n.so` / `libintl.so` | `i18nplugin` / `intlplugin` | `@ohos.i18n` / `@ohos.intl` |
+| `libsystemdatetime.so` | `timeplugin.TimePlugin` | `@ohos.systemDateTime` |
+| `libgeolocationmanager.so` | `locationserviceplugin.LocationServicePlugin` | `@ohos.geoLocationManager` |
+| `libfile_picker.so` | `file.fs.picker.filepicker.FilePicker` | `@ohos.file.picker` |
+| `libfile_photoaccesshelper.so` | `photoaccesshelper.PhotoPlugin` | `@ohos.file.photoAccessHelper` |
+| `libweb_webview.so` | `webviewplugin.{androidasset,webcookie,webstorage}` | `@ohos.web.webview` |
+| `librequest.so` / `libutil.so` | `taskmanagerplugin` / `utilplugin` | `@ohos.request` / `@ohos.util` |
+| `libabilityaccessctrl.so` | `abilityaccessctrl.AbilityAccessCtrl` | `@ohos.abilityAccessCtrl` |
+
+未覆盖：`libuitest.so` 的 `display/screencapture/touchinject`（UI 测试框架专用，运行时不需要）。
+
+### 修复后 logcat
+
+```
+DeviceInfoJni JNI: Register
+DeviceInfoJni JNI: Register success          ← FindClass 成功
+Ace_PluginManager: init plugin: ohos.ace.plugin.device_infoplugin.DeviceInfoPlugin
+DeviceInfoJni JNI: NativeInit                ← 对象建出来了
+```
+
+### 遗留（版本错配）
+
+`libdeviceinfo.so` 比 plugins 仓库 HEAD 新，`NativeInit` 报 13 个方法找不到：
+
+```
+no method for getSecurityPatchTag / getOsReleaseType / getVersionId / getBuildType /
+getBuildUser / getBuildHost / getBuildTime / getBuildRootHash / getSdkApiVersion /
+getMajorVersion / getSeniorVersion / getFeatureVersion / getBuildVersion
+```
+
+这些是**可选方法**，找不到就返回默认值，不崩。要补齐得按 `device_info/device_info.h` 里
+`METHOD_NAMES[]` 的下标顺序加（`METHOD_ID_getMajorVersion` 之前是
+`String get(String)`，之后是 `int get(int)`）。
+
+---
+
 ## 五、技术策略建议
 
 ### 策略 A: 桩实现 (Stub)

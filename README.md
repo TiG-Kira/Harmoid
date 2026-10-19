@@ -1,8 +1,8 @@
-# HOA — Harmony on Android
+# Harmoid — Harmony on Android
 
 在 Android 设备上运行 OpenHarmony / HarmonyOS HAP 应用。
 
-**HOA 是一个正在开发中的实验性项目**，目标是让 HarmonyOS 的 HAP 应用包无需修改即可在 Android 设备上运行。目前已完成核心运行时搭建，ArkTS 页面渲染和原生 .so 加载均已验证通过，但大量系统 API 尚未实现，兼容性有限。
+**Harmoid 是一个正在开发中的实验性项目**，目标是让 HarmonyOS 的 HAP 应用包无需修改即可在 Android 设备上运行。目前已完成核心运行时搭建，ArkTS 页面渲染和原生 .so 加载均已验证通过，但大量系统 API 尚未实现，兼容性有限。
 
 > **下载**：[`Releases`](https://github.com/TiG-Kira/Harmoid/releases) 提供签名后的 APK（arm64-v8a）。
 > 由 `release_apk.yml` 自动构建，keystore 与 KiTerminal-UX 同款（`CN=KiraStudio`）。
@@ -18,6 +18,9 @@
 | 原生 .so 加载 | 支持 | 无 RUNPATH 的闭源 .so 拓扑依赖加载 + musl ABI bridge（libb.so） |
 | C++ STL（libc++_shared） | 支持 | std::string/vector/map/thread/exception/RTTI 等全部通过 |
 | HDC 协议 | 支持 | TCP 8710，支持 install/uninstall/shell/file send，DevEco Studio 可识别为设备 |
+| `@ohos.*` 系统 API | 支持 | 21 个 ArkUI-X 插件的 Java 层已补齐（设备信息/通知/振动/剪贴板/网络/蓝牙/定位/媒体/文件选择/WebView 等） |
+| HAP 通知 | 支持 | HAP 发的通知转发到 Android，点击/清除回灌 ArkTS `onNewWant()`；实况窗转 Android 16 Live Update |
+| HAP 媒体播放 | 支持 | `@ohos.multimedia.media` 播歌会建 Android MediaSession + 系统控件，控件事件回灌给 HAP |
 | 权限映射 | 部分 | 普通权限自动映射（INTERNET 等），危险权限需手动处理 |
 | 生命周期 | 部分 | onCreate/onResume/onPause/onDestroy 已对接，部分中间状态未实现 |
 | HDS 组件 | 部分 | 70+ 导出 mock，功能正确但视觉与原版差异较大 |
@@ -28,9 +31,10 @@
 
 ## 已知限制
 
-HOA 仍在早期开发阶段，以下为已知限制：
+Harmoid 仍在早期开发阶段，以下为已知限制：
 
-- **HAP 兼容性**：目前只有部分 HAP 能正常运行。依赖未实现系统 API 的 HAP 会白屏或崩溃。
+- **HAP 兼容性**：目前只有部分 HAP 能正常运行。ArkUI-X 插件的 Java 层已补齐，但 `.so` 与插件源码存在
+  版本错配（如 `deviceInfo` 有 13 个新方法取不到，返回默认值），部分 HAP 仍会白屏或崩溃。
 - **性能**：ArkUI-X 渲染管线未经优化，复杂页面可能卡顿。
 - **内存**：每个 HAP 启动一个独立进程，多 HAP 同时运行内存压力较大。
 - **稳定性**：长时间运行可能出现资源泄漏，建议测试后重启 app。
@@ -38,7 +42,7 @@ HOA 仍在早期开发阶段，以下为已知限制：
 
 ## 原理
 
-HOA 基于 ArkUI-X 的 Android 构建体系，通过多个仓库的定向适配使运行时能够加载并执行 OHOS 原生格式的 HAP：
+Harmoid 基于 ArkUI-X 的 Android 构建体系，通过多个仓库的定向适配使运行时能够加载并执行 OHOS 原生格式的 HAP：
 
 - **ArkTS 渲染**：ETS VM 执行 modules.abc 字节码，ACE 引擎将 UI 树渲染到 Android SurfaceView
 - **原生 .so 支持**：通过 `libb.so`（musl ABI bridge）在 Android bionic 上运行 OHOS 闭源 .so；ELF patch 将 DT_NEEDED `libc.so` 替换为 `libb.so`；`elf_load_with_deps` 对无 RUNPATH 的 .so 做拓扑依赖加载
@@ -56,7 +60,7 @@ HOA 基于 ArkUI-X 的 Android 构建体系，通过多个仓库的定向适配�
            │ HapInstaller 解压 + ELF patch (libc.so → libb.so)
            ▼
 ┌─────────────────────────────────┐
-│  HOA Application                │
+│  Harmoid Application                │
 │  ├── StageApplication           │  ← ArkUI-X Android 适配器
 │  ├── libarkui_android.so        │  ← 内嵌 ETS VM + ACE 渲染引擎
 │  ├── libb.so (musl bridge)      │  ← musl ABI 桥接（pthread/stdio/dirent/signal）
@@ -88,7 +92,7 @@ HOA 基于 ArkUI-X 的 Android 构建体系，通过多个仓库的定向适配�
 
 ## 机型模拟
 
-HOA 允许把"上报给 HAP 的设备信息"改成任意机型，设置页 → **模拟机型** 提供一批华为 / 鸿蒙预设，也可以 **自定义机型** 手动填写字段，或选 **跟随宿主设备** 用真机信息。
+Harmoid 允许把"上报给 HAP 的设备信息"改成任意机型，设置页 → **模拟机型** 提供一批华为 / 鸿蒙预设，也可以 **自定义机型** 手动填写字段，或选 **跟随宿主设备** 用真机信息。
 
 实现在 `app/src/main/java/app/hackeris/hoa/device/`：
 
@@ -126,7 +130,7 @@ ArkUI-X 的 `WindowViewCommon.processAvoidAreas()` 用 `intersection(WindowView 
 build_all.sh (ArkUI-X → libb.so → sync → APK)
 
 或分步：
-repo init (HOA manifest) → prebuilts_download.sh → build.sh → build_musl_bridge.sh → sync_arkui_x.sh → gradlew assembleDebug
+repo init (Harmoid manifest) → prebuilts_download.sh → build.sh → build_musl_bridge.sh → sync_arkui_x.sh → gradlew assembleDebug
 ```
 
 构建耗时数小时不等，视机器性能和网络状况而定。磁盘需求约 100GB（源码 + 产物）。
@@ -156,13 +160,13 @@ gh release upload <tag> arkui-x-prebuilts-arm64.zip
 ## 运行
 
 - **生产模式**：MainActivity → Install HAP（选择文件）→ 点击启动
-- **开发测试**：`adb shell am start -n app.hackeris.hoa/.DevTestActivity --ez autoLaunch true`
+- **开发测试**：`adb shell am start -n com.kira.harmoid/.DevTestActivity --ez autoLaunch true`
 
 要求：Android 11+，arm64-v8a 设备。
 
 ## 社区
 
-- **获取 HAP**：可前往 [sydxky.cn](https://sydxky.cn/) 下载 HAP 应用包。由于 HOA 尚在开发中，大部分 HAP 暂无法正常运行，仅建议用于测试。
+- **获取 HAP**：可前往 [sydxky.cn](https://sydxky.cn/) 下载 HAP 应用包。由于 Harmoid 尚在开发中，大部分 HAP 暂无法正常运行，仅建议用于测试。
 - **QQ 群**：欢迎加入交流群讨论。
 
 <img src="media/qq_qrcode.jpg" alt="QQ群二维码" width="280">

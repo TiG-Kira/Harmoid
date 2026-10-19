@@ -61,6 +61,15 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.NFC" />
 
+    <!-- ArkUI-X 插件 (ohos.ace.plugin.*) 需要的网络 / 音频权限 -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_STATE" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.DOWNLOAD_WITHOUT_NOTIFICATION" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
     <!-- miuix-blur 声明 minSdk 33（AGSL shader），HOA 仍支持 Android 11（API 30）。
          浮动玻璃底栏在代码里按 SDK_INT >= 33 门控，低版本自动回退 Miuix 经典底栏，
          因此这里放行合并检查是安全的。 -->
@@ -171,6 +180,7 @@
             android:name=".HoaAbilityActivity0"
             android:process=":hap0"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -178,6 +188,7 @@
             android:name=".HoaAbilityActivity1"
             android:process=":hap1"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -185,6 +196,7 @@
             android:name=".HoaAbilityActivity2"
             android:process=":hap2"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -192,6 +204,7 @@
             android:name=".HoaAbilityActivity3"
             android:process=":hap3"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -199,6 +212,7 @@
             android:name=".HoaAbilityActivity4"
             android:process=":hap4"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -206,6 +220,7 @@
             android:name=".HoaAbilityActivity5"
             android:process=":hap5"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -213,6 +228,7 @@
             android:name=".HoaAbilityActivity6"
             android:process=":hap6"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -220,6 +236,7 @@
             android:name=".HoaAbilityActivity7"
             android:process=":hap7"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -227,6 +244,7 @@
             android:name=".HoaAbilityActivity8"
             android:process=":hap8"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
@@ -234,6 +252,7 @@
             android:name=".HoaAbilityActivity9"
             android:process=":hap9"
             android:exported="true"
+            android:launchMode="singleTop"
             android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 

@@ -18,20 +18,20 @@ configurations.all {
 }
 
 android {
-    namespace = "app.hackeris.hoa"
+    namespace = "com.kira.harmoid"
     compileSdk = 37
     ndkVersion = "28.2.13676358"
 
     defaultConfig {
-        applicationId = "app.hackeris.hoa"
+        applicationId = "com.kira.harmoid"
         minSdk = 30
         targetSdk = 36
         // 版本号编制规则:
         //   versionName = YY.M.D.B  (年.月.日.当日构建次数)
         //   versionCode = YYMMDDBB  (年年月月日日次次，共 9 位)
         // 示例: 26.5.29.1 → 260529001 (2026-05-29 第 1 次构建)
-        versionCode = 261019003
-        versionName = "26.10.19.3"
+        versionCode = 261020001
+        versionName = "26.10.20.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -147,6 +147,8 @@ dependencies {
     implementation(libs.miuix.icons)
     implementation(libs.miuix.preference)
     implementation(libs.androidx.navigationevent)
+    // 关于页开发者头像（Coil 异步图片）
+    implementation(libs.coil.compose)
     // Liquid Glass 取景层：排除 Compose Multiplatform 产物，统一走 androidx.compose
     implementation(libs.kyant.backdrop) {
         exclude(group = "org.jetbrains.compose")
