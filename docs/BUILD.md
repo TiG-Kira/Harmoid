@@ -212,16 +212,20 @@ export KI_TERMINAL_KEY_ALIAS=...      # 可选，默认 ki-terminal
 3. 解压后校验 `libarkui_android.so` / `arkui_android_adapter.jar` / `assets/sys/systemres` 三件套；
 4. 校验通过后回写缓存。
 
-制包方法（在**能跑完整构建的机器**上做一次即可）：
+制包方法：`scripts/pack_prebuilts.sh` 已经把这条路径固化了。
 
 ```bash
-zip -r arkui-x-prebuilts-arm64.zip \
-  app/src/main/jniLibs \
-  app/libs \
-  app/src/main/assets/sys
+# 从上游 Release 的 APK 里抽出 .so 和 assets/sys（这部分 APK 里就有），
+# adapter jar 必须另外给（它被 dex 合并进 classes.dex 了，抽不出来）
+./scripts/pack_prebuilts.sh --jar <path>/arkui_android_adapter.jar
+
+# 或者整份产物都来自本地 ArkUI-X 构建
+./scripts/pack_prebuilts.sh --from-build ~/arkui-x/out/arkui-x/aosp_clang_arm64_release
 ```
 
-然后把 zip 传到本仓库的 Release（文件名保持一致），或把下载直链写进仓库变量 `HOA_PREBUILT_URL`。
+产出 `arkui-x-prebuilts-arm64.zip`，传到本仓库 Release（文件名保持一致），或把直链写进仓库变量 `HOA_PREBUILT_URL`。
+
+`--jar` 的来源是 ArkUI-X 构建产物里的 `arkui_android_adapter.jar`（`stage/` 或 `adapter/` 目录下）。这是唯一必须自己构建才能拿到的东西，其余都能从上游 APK 里抽。
 
 签名 Secrets 与 KiTerminal-UX 同名同义：`JKS_BASE64`、`KI_TERMINAL_STORE_PASSWORD`、`KI_TERMINAL_KEY_PASSWORD`、`KI_TERMINAL_KEY_ALIAS`。私钥不入库（`*.jks` 已在 `.gitignore` 里）。
 
