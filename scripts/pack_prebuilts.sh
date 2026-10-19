@@ -103,6 +103,17 @@ SO_COUNT=$(find "$WORK/lib/arm64-v8a" -name '*.so' 2>/dev/null | wc -l | tr -d '
 cp -f "$WORK"/lib/arm64-v8a/*.so "$JNI_DIR/"
 log "  → jniLibs: $SO_COUNT 个 .so"
 
+# 这几个 .so 由本仓库 app/CMakeLists.txt 自己编（stub / bridge），
+# APK 里也有一份同名文件，留着会和 CMake 产物撞成
+# DuplicateRelativeFileException（mergeDebugNativeLibs 直接失败）。
+for dup in libace_napi.z.so libhilog_ndk.z.so libohaudio.so \
+           librawfile.z.so libbundle_ndk.z.so; do
+    if [ -f "$JNI_DIR/$dup" ]; then
+        rm -f "$JNI_DIR/$dup"
+        log "  → 剔除 $dup（由 CMake 构建）"
+    fi
+done
+
 [ -d "$WORK/assets/sys" ] || die "APK 里没有 assets/sys/"
 cp -rf "$WORK"/assets/sys/. "$SYS_DIR"/
 log "  → assets/sys: $(find "$SYS_DIR" -type f | wc -l | tr -d ' ') 个文件"
