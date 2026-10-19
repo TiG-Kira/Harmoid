@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.util.Log
 import com.kira.harmoid.bridge.HapSession
 import com.kira.harmoid.bridge.HarmoidMediaBridge
+import com.kira.harmoid.hap.HapBundleLoader
 import ohos.stage.ability.adapter.StageActivity
 import org.json.JSONObject
 import java.io.File
@@ -128,6 +129,115 @@ open class HoaAbilityActivity : StageActivity() {
         val moduleName = intent.getStringExtra("MODULE_NAME") ?: "entry"
         val abilityName = intent.getStringExtra("ABILITY_NAME") ?: "EntryAbility"
         applyHapTaskDescription(bundleName, moduleName, abilityName)
+    }
+
+    // ================================================================
+    // startAbility 路由 —— HAP 内启动新 ability 不再闪退
+    // ================================================================
+    //
+    // 上游 StageActivity 对非平台 bundle 的 startAbility 只会去拉
+    // `<bundle>.<Module><Ability>Activity` 这种 Android 侧根本不存在的
+    // Activity（ActivityNotFoundException → ERR_INVALID_PARAMETERS →
+    // RESOLVE_ABILITY_ERR）。HAP 拿到 ability 管理器的失败错误后，若
+    // JS 侧没 catch，未捕获的 promise rejection 会直接把 ability 打崩
+    // （用户实测：执行新 ability 即闪退）。
+    //
+    // Harmoid 的语义：同 bundle 的 ability 启动 = 分配新进程槽位，用
+    // 目标 ability 实例名再起一个 HoaAbilityActivity{slot}（与桌面
+    // 图标 / 应用信息页启动同一条 ProcessSlotManager.launchHap 链路）。
+    //
+    // 限制：startAbilityForResult 的结果不会跨槽位回传（上游同样没有
+    // 回传实现，只是错误码语义更早暴露）。
+    override fun startActivity(bundleName: String, activityName: String, params: String): Int {
+        if (routeAbilityToSlot(bundleName, activityName, params, null)) {
+            return ERR_OK_INT
+        }
+        return try {
+            super.startActivity(bundleName, activityName, params)
+        } catch (t: Throwable) {
+            // 上游只 catch ActivityNotFoundException；ComponentName 对
+            // 空串/畸形名字可能抛 IllegalArgumentException 等未捕获异常，
+            // 在这里兜住转成错误码，避免整进程崩溃。
+            Log.e(TAG, "startActivity defensively caught", t)
+            ERR_INVALID_PARAMETERS_INT
+        }
+    }
+
+    override fun startActivityForResult(
+        bundleName: String,
+        activityName: String,
+        params: String,
+        requestCode: Int
+    ): Int {
+        if (routeAbilityToSlot(bundleName, activityName, params, requestCode)) {
+            return ERR_OK_INT
+        }
+        return try {
+            super.startActivityForResult(bundleName, activityName, params, requestCode)
+        } catch (t: Throwable) {
+            Log.e(TAG, "startActivityForResult defensively caught", t)
+            ERR_INVALID_PARAMETERS_INT
+        }
+    }
+
+    /**
+     * 尝试把同 bundle 的 startAbility 路由到新进程槽位。
+     *
+     * ParseWant 拼出的 activityName 形如 `<bundle>.<ModuleCap><ability>Activity`
+     * （如 `com.example.app.EntryEntryAbilityActivity`）。这里在已解包的
+     * `<bundle>.*` 模块目录里反查 module 与 ability，并用 module.json 的
+     * abilities 列表验证。匹配失败返回 false，走上游错误路径。
+     */
+    private fun routeAbilityToSlot(
+        bundleName: String,
+        activityName: String,
+        params: String?,
+        requestCode: Int?
+    ): Boolean {
+        val myBundle = intent.getStringExtra("BUNDLE_NAME") ?: return false
+        val targetBundle = bundleName.ifBlank { myBundle }
+        if (targetBundle != myBundle) return false   // 跨 HAP / 系统 ability：维持上游行为
+        if (activityName.isBlank()) return false
+
+        val remainder = activityName.removePrefix("$myBundle.").removeSuffix(ACTIVITY_SUFFIX)
+        if (remainder.isBlank()) return false
+
+        val hapRoot = File(filesDir, "hap")
+        val moduleDirs = hapRoot.listFiles()
+            ?.filter { it.isDirectory && it.name.startsWith("$myBundle.") }
+            ?: return false
+
+        val loader = HapBundleLoader()
+        for (moduleDir in moduleDirs) {
+            val moduleName = moduleDir.name.removePrefix("$myBundle.")
+            val moduleCap = moduleName.replaceFirstChar { it.uppercaseChar() }
+            val ability = if (remainder.startsWith(moduleCap)) {
+                remainder.removePrefix(moduleCap)
+            } else {
+                continue
+            }
+            // module.json 验证：ability 必须真实存在，防止前缀误吞
+            val abilities = try {
+                loader.parseModuleJson(File(moduleDir, "module.json").readText()).abilities
+            } catch (e: Exception) {
+                Log.e(TAG, "routeAbilityToSlot: parse ${moduleDir.name}/module.json failed", e)
+                continue
+            }
+            val matched = abilities.firstOrNull { it.name == ability } ?: continue
+
+            val slot = ProcessSlotManager.launchHap(
+                applicationContext, myBundle, moduleName, ability, params
+            )
+            if (slot < 0) {
+                Log.e(TAG, "routeAbilityToSlot: no free slot for $myBundle/$ability")
+                return false
+            }
+            Log.e(TAG, "startAbility routed to slot=$slot: bundle=$myBundle " +
+                "module=$moduleName ability=$ability" +
+                (if (requestCode != null) " (forResult=$requestCode, result 不跨槽位回传)" else ""))
+            return true
+        }
+        return false
     }
 
     override fun onResume() {
@@ -528,5 +638,12 @@ open class HoaAbilityActivity : StageActivity() {
         /** edge-to-edge 自愈开关的存储位置（与设置页的 hoa_ui_prefs 分开，互不影响）。 */
         private const val PREFS_NAME = "hoa_hap_window"
         private const val KEY_EDGE_TO_EDGE = "edge_to_edge_enabled"
+
+        /** StageActivity.ERR_OK 是 private，这里用字面量保持同语义。 */
+        private const val ERR_OK_INT = 0
+        private const val ERR_INVALID_PARAMETERS_INT = -1
+
+        /** AbilityContextAdapter::ParseWant 拼在类名尾部的后缀。 */
+        private const val ACTIVITY_SUFFIX = "Activity"
     }
 }
