@@ -116,8 +116,14 @@ fi
 mkdir -p "$ROOT/app/libs"
 if [ -n "$JAR" ]; then
     [ -f "$JAR" ] || die "jar 不存在: $JAR"
-    cp -f "$JAR" "$ROOT/app/libs/arkui_android_adapter.jar"
-    log "adapter jar ← $JAR"
+    SRC_REAL="$(cd "$(dirname "$JAR")" && pwd)/$(basename "$JAR")"
+    DST_REAL="$(cd "$ROOT/app/libs" && pwd)/arkui_android_adapter.jar"
+    if [ "$SRC_REAL" = "$DST_REAL" ]; then
+        log "adapter jar 已在目标位置，跳过复制"
+    else
+        cp -f "$JAR" "$ROOT/app/libs/arkui_android_adapter.jar"
+        log "adapter jar ← $JAR"
+    fi
 elif [ -f "$ROOT/app/libs/arkui_android_adapter.jar" ]; then
     log "adapter jar 已存在于 app/libs/"
 else

@@ -687,6 +687,24 @@ top avoid = intersection(WindowView 窗口矩形, (0, 0, screenW, insets.top))
 
 ---
 
+### 32. 自己把 arkui_android_adapter.jar 编出来（2026-10-19）
+
+**背景**：`app/libs/arkui_android_adapter.jar` 不入库，之前只能靠一次 100GB 的 ArkUI-X 源码构建拿到，本地开发基本免谈。实际上它只是 ArkUI-X 的 Java 适配层。
+
+**发现**：源码在 `harmony-on-android/arkui_for_android` 的 `capability/java`、`entrance/java`、`stage/ability/java`，共 151 个 `.java`（`ohos.ace.adapter.*` + `ohos.stage.ability.adapter.*`），依赖只有 Android framework + androidx 的 `core` / `window` / `window-java`。
+
+**做法**（`scripts/build_adapter_jar.sh`）：浅克隆三个目录 → 打两处 API 兼容补丁 → javac（JDK 17 target）→ jar。产出 458KB / 283 class，本机 5 秒编完。
+
+补丁：
+- `AceWeb`：删掉 `WebSettings.setAppCacheEnabled/setAppCachePath`，API 33 起已从 SDK 移除
+- `AceWeb`：`MediaMetadataRetriever.release()` 的 catch 从 `IllegalStateException` 放宽到 `Exception`，API 34 起该方法声明 `throws IOException`
+
+`StageFragment*` 排除（依赖 androidx.fragment，HOA 走 StageActivity 入口用不到）。
+
+**验证**：换成真 jar 后 `compileDebugKotlin` 通过 → `assembleDebug` 195MB / `assembleRelease` 166MB 均成功；APK 里确认 `Lohos/stage/ability/adapter/StageActivity;` 在 classes3.dex，168 个 `.so`、324 个 `assets/sys` 条目齐备。
+
+---
+
 ## 构建与工具链
 
 ```bash

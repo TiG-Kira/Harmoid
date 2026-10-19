@@ -140,10 +140,12 @@ repo init (HOA manifest) → prebuilts_download.sh → build.sh → build_musl_b
 
 ArkUI-X 产物（`jniLibs` / `arkui_android_adapter.jar` / `assets/sys`）由 `.github/actions/prepare-arkui-x` 恢复：先查 Actions 缓存，未命中时从本仓库 Release 的 `arkui-x-prebuilts-arm64.zip` 或仓库变量 `HOA_PREBUILT_URL` 下载并回写缓存。**没有这份产物就打不出 APK**——它来自 ArkUI-X 的 100GB 级源码构建，CI 里不会重头编译。
 
-好在大部分产物可以从上游 Release 的 APK 里抽出来（`lib/arm64-v8a/*.so` 和 `assets/sys/**` 都在里面），只有 `arkui_android_adapter.jar` 被 dex 合并进 `classes.dex`、抽不出来，必须来自一次本地 ArkUI-X 构建。一键制包：
+好在大部分产物可以从上游 Release 的 APK 里抽出来（`lib/arm64-v8a/*.so` 和 `assets/sys/**` 都在里面），只有 `arkui_android_adapter.jar` 被 dex 合并进 `classes.dex`、抽不出来——但它只是 ArkUI-X 的 Java 适配层，151 个源文件 javac 一下就有，不需要 100GB 源码构建：
 
 ```bash
-./scripts/pack_prebuilts.sh --jar /path/to/arkui_android_adapter.jar
+./scripts/build_adapter_jar.sh      # 编出 arkui_android_adapter.jar
+./scripts/pack_prebuilts.sh         # 抽 .so/资源，打成 arkui-x-prebuilts-arm64.zip
+gh release upload <tag> arkui-x-prebuilts-arm64.zip
 ```
 
 
@@ -165,6 +167,7 @@ ArkUI-X 产物（`jniLibs` / `arkui_android_adapter.jar` / `assets/sys`）由 `.
 
 - `docs/BUILD.md` — 完整构建文档
 - `docs/ARKUI-X_PATCHES.md` — ArkUI-X 源码修改说明
+- `scripts/build_adapter_jar.sh` — 从 ArkUI-X 源码编出 `arkui_android_adapter.jar`
 - `scripts/pack_prebuilts.sh` — 生成 CI 用的 `arkui-x-prebuilts-arm64.zip`
 - `agents/PLAN.md` — 技术方案
 - `agents/PROGRESS.md` — 项目进展

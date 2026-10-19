@@ -218,8 +218,9 @@ export KI_TERMINAL_KEY_ALIAS=...      # 可选，默认 ki-terminal
 
 ```bash
 # 从上游 Release 的 APK 里抽出 .so 和 assets/sys（这部分 APK 里就有），
-# adapter jar 必须另外给（它被 dex 合并进 classes.dex 了，抽不出来）
-./scripts/pack_prebuilts.sh --jar <path>/arkui_android_adapter.jar
+# adapter jar 用 scripts/build_adapter_jar.sh 现编（见下）
+./scripts/build_adapter_jar.sh
+./scripts/pack_prebuilts.sh
 
 # 或者整份产物都来自本地 ArkUI-X 构建
 ./scripts/pack_prebuilts.sh --from-build ~/arkui-x/out/arkui-x/aosp_clang_arm64_release
@@ -227,7 +228,27 @@ export KI_TERMINAL_KEY_ALIAS=...      # 可选，默认 ki-terminal
 
 产出 `arkui-x-prebuilts-arm64.zip`，传到本仓库 Release（文件名保持一致），或把直链写进仓库变量 `HOA_PREBUILT_URL`。
 
-`--jar` 的来源是 ArkUI-X 构建产物里的 `arkui_android_adapter.jar`（`stage/` 或 `adapter/` 目录下）。这是唯一必须自己构建才能拿到的东西，其余都能从上游 APK 里抽。
+### adapter jar 不用完整构建 ArkUI-X
+
+`arkui_android_adapter.jar` 只是 ArkUI-X 的 **Java 适配层**（`ohos.stage.ability.adapter.*` + `ohos.ace.adapter.*`），源码在 [arkui_for_android](https://github.com/harmony-on-android/arkui_for_android) 的 `capability/java`、`entrance/java`、`stage/ability/java` 三个目录，一共 151 个 `.java`，只依赖 Android framework + 三个 androidx 包。
+
+所以 `scripts/build_adapter_jar.sh` 直接把它们 javac 成 jar，几分钟搞定，**不需要 100GB 源码构建**：
+
+```bash
+./scripts/build_adapter_jar.sh                      # 默认 --ref hoa
+./scripts/build_adapter_jar.sh --src /path/to/repo  # 复用已有 checkout
+```
+
+脚本会打两处 API 兼容补丁（都不是行为改动）：
+
+| 补丁 | 原因 |
+|------|------|
+| 去掉 `WebSettings.setAppCacheEnabled/setAppCachePath` | 自 API 33 起从 SDK 移除，AppCache 本身已废弃 |
+| `release()` 的 catch 从 `IllegalStateException` 放宽到 `Exception` | 自 API 34 起 `MediaMetadataRetriever.release()` 声明 `throws IOException` |
+
+`StageFragment*` 两个类被排除：它们依赖 `androidx.fragment`，而 HOA 走的是 `StageActivity` 入口，用不到 Fragment。
+
+> 这个 jar 有 458KB / 283 个 class，产物不入库（`app/libs/*.jar` 在 `.gitignore` 里），需要时现编。
 
 签名 Secrets 与 KiTerminal-UX 同名同义：`JKS_BASE64`、`KI_TERMINAL_STORE_PASSWORD`、`KI_TERMINAL_KEY_PASSWORD`、`KI_TERMINAL_KEY_ALIAS`。私钥不入库（`*.jks` 已在 `.gitignore` 里）。
 
