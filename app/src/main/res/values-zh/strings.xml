@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">HOA</string>
-    <string name="devtest_label">HOA 开发测试</string>
+    <string name="app_name">Harmoid</string>
+    <string name="devtest_label">Harmoid 开发测试</string>
 
     <!-- MainActivity -->
     <string name="hint_no_haps">尚未安装 HAP。\n点击下方按钮安装一个。</string>
@@ -89,7 +89,7 @@
 
     <!-- First launch -->
     <string name="first_launch_title">早期版本提示</string>
-    <string name="first_launch_msg">HOA 目前处于早期开发阶段，仅能较完善地支持部分 HAP，多数功能仍不完善。\n\n如遇到运行问题，可通过菜单导出日志并反馈给开发者。</string>
+    <string name="first_launch_msg">Harmoid 目前处于早期开发阶段，仅能较完善地支持部分 HAP，多数功能仍不完善。\n\n如遇到运行问题，可通过菜单导出日志并反馈给开发者。</string>
     <string name="first_launch_btn">我知道了</string>
 
     <!-- Update check -->
@@ -141,7 +141,7 @@
     <string name="settings_section_connect">连接</string>
     <string name="settings_section_appearance">外观</string>
     <string name="settings_section_about">关于</string>
-    <string name="settings_footer">HOA 让鸿蒙 HAP 跑在 Android 上。机型模拟只改变 HAP 看到的设备身份，不影响真实硬件。</string>
+    <string name="settings_footer">Harmoid 让鸿蒙 HAP 跑在 Android 上。机型模拟只改变 HAP 看到的设备身份，不影响真实硬件。</string>
 
     <string name="settings_device_model">模拟机型</string>
     <string name="settings_device_model_summary">选择 HAP 通过 @ohos.deviceInfo 看到的机型</string>
@@ -166,12 +166,35 @@
     <string name="settings_material_you">Material You 动态取色</string>
     <string name="settings_material_you_summary">跟随系统壁纸配色（Android 12+）</string>
     <string name="settings_check_update">检查更新</string>
-    <string name="settings_check_update_summary">查找是否有更新的 HOA 版本</string>
+    <string name="settings_check_update_summary">查找是否有更新的 Harmoid 版本</string>
     <string name="settings_feedback">问题反馈</string>
     <string name="settings_feedback_summary">导出日志或提交 Issue</string>
     <string name="settings_about">版本信息</string>
-    <string name="settings_version_fmt">HOA %1$s</string>
-    <string name="settings_about_summary">HOA %1$s（构建 %2$d）\n\n在 Android 上运行鸿蒙 HAP 应用。\n\n实验性项目，遇到问题请反馈。</string>
+    <string name="settings_version_fmt">Harmoid %1$s</string>
+    <string name="settings_about_summary">Harmoid %1$s（构建 %2$d）\n\n在 Android 上运行鸿蒙 HAP 应用。\n\n实验性项目，遇到问题请反馈。</string>
     <string name="dialog_feedback_export_logs_summary">打包运行日志，便于分享给开发者</string>
     <string name="update_error_fmt">检查失败：%1$s</string>
+
+    <!-- 关于页（自 Termux Ultra 移植） -->
+    <string name="about_preference_title">关于</string>
+    <string name="back">返回</string>
+    <string name="device_model">设备型号</string>
+    <string name="android_version">Android 版本</string>
+    <string name="kernel_version">内核版本</string>
+    <string name="developer_name">开发者</string>
+    <string name="about_developer_summary">@TiG-Kira</string>
+    <string name="check_updates">检查更新</string>
+    <string name="about_check_updates_desc">点击检查是否有更新的 Harmoid 版本</string>
+    <string name="checking_updates">正在检查更新&#8230;</string>
+    <string name="new_version_available">发现新版本</string>
+    <string name="up_to_date">已是最新版本</string>
+    <string name="harmoid_version">Harmoid 版本</string>
+    <string name="about_build_fmt">构建 %1$d</string>
+    <string name="about_based_on_hoa">基于 HOA %1$s</string>
+    <string name="about_runtime_info">ArkUI-X 运行时 &#183; arm64-v8a</string>
+    <string name="about_license">Harmoid 是基于 HOA 与 OpenHarmony ArkUI-X 的第三方运行环境，遵循各上游项目的开源许可证。</string>
+    <string name="about_repo_harmoid">Harmoid：github.com/TiG-Kira/Harmoid</string>
+    <string name="about_repo_hoa">上游 HOA：github.com/harmony-on-android/HOA</string>
+    <string name="tag_beta">Beta</string>
+    <string name="tag_internal">内测</string>
 </resources>

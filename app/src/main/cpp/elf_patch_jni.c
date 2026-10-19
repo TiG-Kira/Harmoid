@@ -17,7 +17,7 @@ int elf_patch_runpath_to_origin(const char *path);
 int elf_load_with_deps(const char *path);
 
 JNIEXPORT jboolean JNICALL
-Java_app_hackeris_hoa_hap_ElfPatcher_patchSo(JNIEnv *env, jclass cls, jstring path)
+Java_com_kira_harmoid_hap_ElfPatcher_patchSo(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
@@ -29,7 +29,7 @@ Java_app_hackeris_hoa_hap_ElfPatcher_patchSo(JNIEnv *env, jclass cls, jstring pa
 }
 
 JNIEXPORT jint JNICALL
-Java_app_hackeris_hoa_hap_ElfPatcher_patchGot(JNIEnv *env, jclass cls, jstring path)
+Java_com_kira_harmoid_hap_ElfPatcher_patchGot(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
@@ -79,7 +79,7 @@ Java_app_hackeris_hoa_hap_ElfPatcher_patchGot(JNIEnv *env, jclass cls, jstring p
  * Returns 0 on success, -1 on failure.
  */
 JNIEXPORT jint JNICALL
-Java_app_hackeris_hoa_hap_ElfPatcher_nativeLoad(JNIEnv *env, jclass cls, jstring path)
+Java_com_kira_harmoid_hap_ElfPatcher_nativeLoad(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
@@ -100,7 +100,7 @@ Java_app_hackeris_hoa_hap_ElfPatcher_nativeLoad(JNIEnv *env, jclass cls, jstring
  * the file had none or on error.
  */
 JNIEXPORT jboolean JNICALL
-Java_app_hackeris_hoa_hap_ElfPatcher_patchRunpath(JNIEnv *env, jclass cls, jstring path)
+Java_com_kira_harmoid_hap_ElfPatcher_patchRunpath(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);

@@ -37,7 +37,7 @@ CFLAGS_COMMON := \
     -std=c11 \
     -D__ANDROID__ \
     -D__HISPARK_LINUX__ \
-    -D_GNU_SOURCE \
+    -D_XOPEN_SOURCE=700 \
     -O2 \
     -g \
     -ffunction-sections \
@@ -80,6 +80,7 @@ MUSL_INTERNAL_C := \
     $(MUSL)/src/internal/syscall_ret.c \
     $(MUSL)/src/internal/procfdname.c \
     $(MUSL)/src/internal/version.c \
+    $(MUSL)/src/internal/vdso.c \
     $(MUSL)/src/internal/floatscan.c \
     $(MUSL)/src/internal/intscan.c \
     $(MUSL)/src/internal/shgetc.c
@@ -207,6 +208,8 @@ BRIDGE_SRCS := \
     $(SRCDIR)/signal_bridge.c \
     $(SRCDIR)/got_patch.c \
     $(SRCDIR)/popen_bridge.c \
+    $(SRCDIR)/lfs64_wrappers.c \
+    $(SRCDIR)/bionic_pthread_compat.c \
 
 # ── Object files ──────────────────────────────────────────────────────
 

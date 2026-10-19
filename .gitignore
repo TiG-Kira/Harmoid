@@ -40,3 +40,10 @@ app/ki-terminal-release.jks
 
 # 本地打包产物
 dist/
+
+# WorkBuddy 会话目录（临时脚本 / 日志 / 截图）
+.workbuddy/
+
+# 本地重新打包的 ArkUI-X 预编译产物（101MB，不入库，CI 用 Release 资产）
+arkui-x-prebuilts-arm64.zip
+*.zip

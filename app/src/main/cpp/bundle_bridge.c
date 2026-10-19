@@ -34,7 +34,7 @@ typedef struct ArkUI_DrawableDescriptor ArkUI_DrawableDescriptor;
 /* Find the most recently installed HAP's module.json. Returns a malloc'd path. */
 static char *find_hap_module_dir(void)
 {
-    const char *base = "/data/user/0/app.hackeris.hoa/files/hap";
+    const char *base = "/data/user/0/com.kira.harmoid/files/hap";
     DIR *d = opendir(base);
     if (!d) return NULL;
 

@@ -1,6 +1,6 @@
 <resources>
-    <string name="app_name">HOA</string>
-    <string name="devtest_label">HOA Dev Test</string>
+    <string name="app_name">Harmoid</string>
+    <string name="devtest_label">Harmoid Dev Test</string>
 
     <!-- MainActivity -->
     <string name="hint_no_haps">No HAPs installed yet.\nTap below to install one.</string>
@@ -86,7 +86,7 @@
 
     <!-- First launch -->
     <string name="first_launch_title">Early Stage Notice</string>
-    <string name="first_launch_msg">HOA is in early development and currently only supports a limited set of HAPs. Many features are still incomplete.\n\nIf you encounter issues, you can export logs via the menu and share them for feedback.</string>
+    <string name="first_launch_msg">Harmoid is in early development and currently only supports a limited set of HAPs. Many features are still incomplete.\n\nIf you encounter issues, you can export logs via the menu and share them for feedback.</string>
     <string name="first_launch_btn">I Understand</string>
 
     <!-- Update check -->
@@ -140,7 +140,7 @@
     <string name="settings_section_connect">Connectivity</string>
     <string name="settings_section_appearance">Appearance</string>
     <string name="settings_section_about">About</string>
-    <string name="settings_footer">HOA runs HarmonyOS HAP packages on Android. Device emulation only changes the identity reported to HAPs.</string>
+    <string name="settings_footer">Harmoid runs HarmonyOS HAP packages on Android. Device emulation only changes the identity reported to HAPs.</string>
 
     <string name="settings_device_model">Emulated device</string>
     <string name="settings_device_model_summary">Pick the model that HAPs see through @ohos.deviceInfo</string>
@@ -165,12 +165,35 @@
     <string name="settings_material_you">Material You colors</string>
     <string name="settings_material_you_summary">Follow the system wallpaper palette (Android 12+)</string>
     <string name="settings_check_update">Check for updates</string>
-    <string name="settings_check_update_summary">Look for a newer HOA release</string>
+    <string name="settings_check_update_summary">Look for a newer Harmoid release</string>
     <string name="settings_feedback">Feedback</string>
     <string name="settings_feedback_summary">Export logs or open an issue</string>
     <string name="settings_about">Version</string>
-    <string name="settings_version_fmt">HOA %1$s</string>
-    <string name="settings_about_summary">HOA %1$s (build %2$d)\n\nRun HarmonyOS HAP packages on Android.\n\nThis is an experimental project - expect rough edges.</string>
+    <string name="settings_version_fmt">Harmoid %1$s</string>
+    <string name="settings_about_summary">Harmoid %1$s (build %2$d)\n\nRun HarmonyOS HAP packages on Android.\n\nThis is an experimental project - expect rough edges.</string>
     <string name="dialog_feedback_export_logs_summary">Zip the runtime logs so they can be shared</string>
     <string name="update_error_fmt">Check failed: %1$s</string>
+
+    <!-- About page (ported from Termux Ultra) -->
+    <string name="about_preference_title">About</string>
+    <string name="back">Back</string>
+    <string name="device_model">Device model</string>
+    <string name="android_version">Android version</string>
+    <string name="kernel_version">Kernel version</string>
+    <string name="developer_name">Developer</string>
+    <string name="about_developer_summary">@TiG-Kira</string>
+    <string name="check_updates">Check for updates</string>
+    <string name="about_check_updates_desc">Tap to look for a newer Harmoid release</string>
+    <string name="checking_updates">Checking for updates&#8230;</string>
+    <string name="new_version_available">New version available</string>
+    <string name="up_to_date">You are up to date</string>
+    <string name="harmoid_version">Harmoid version</string>
+    <string name="about_build_fmt">Build %1$d</string>
+    <string name="about_based_on_hoa">Based on HOA %1$s</string>
+    <string name="about_runtime_info">ArkUI-X runtime &#183; arm64-v8a</string>
+    <string name="about_license">Harmoid is a third-party runtime built on HOA and OpenHarmony ArkUI-X, and follows the open-source licenses of its upstream projects.</string>
+    <string name="about_repo_harmoid">Harmoid: github.com/TiG-Kira/Harmoid</string>
+    <string name="about_repo_hoa">Upstream HOA: github.com/harmony-on-android/HOA</string>
+    <string name="tag_beta">Beta</string>
+    <string name="tag_internal">Internal</string>
 </resources>

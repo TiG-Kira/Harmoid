@@ -3,7 +3,7 @@
  *
  * Implements the OHOS RawFile native API on top of the HAP extraction
  * directory.  HAP rawfiles live under:
- *   /data/user/0/app.hackeris.hoa/files/hap/<bundle>.<module>/resources/rawfile/
+ *   /data/user/0/com.kira.harmoid/files/hap/<bundle>.<module>/resources/rawfile/
  *
  * NativeResourceManager stores all rawfile directories found on disk
  * and OpenRawFile/OpenRawDir search across them.  In HOA each process
@@ -80,7 +80,7 @@ NativeResourceManager *OH_ResourceManager_InitNativeResourceManager(
     NativeResourceManager *mgr = (NativeResourceManager*)calloc(1, sizeof(*mgr));
     if (!mgr) return NULL;
 
-    const char *data_dir = "/data/user/0/app.hackeris.hoa";
+    const char *data_dir = "/data/user/0/com.kira.harmoid";
     char hap_root[PATH_MAX];
     snprintf(hap_root, sizeof(hap_root), "%s/files/hap", data_dir);
 
