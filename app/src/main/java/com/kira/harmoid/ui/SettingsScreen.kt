@@ -45,7 +45,6 @@ import com.kira.harmoid.hdc.HdcService
 import com.kira.harmoid.logging.LogCollector
 import com.kira.harmoid.ui.theme.ThemePrefs
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.AccessTime
 import androidx.compose.material.icons.rounded.BugReport
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Info
@@ -104,8 +103,6 @@ fun SettingsScreen(
     var showPortDialog by remember { mutableStateOf(false) }
     var showFeedbackDialog by remember { mutableStateOf(false) }
     var showPermissionsDialog by remember { mutableStateOf(false) }
-    var updateMessage by remember { mutableStateOf<String?>(null) }
-    var updateHasNewVersion by remember { mutableStateOf(false) }
 
     val materialYou by ThemePrefs.materialYouEnabled.collectAsState()
     LaunchedEffect(Unit) {
@@ -270,17 +267,6 @@ fun SettingsScreen(
             item(key = "card_about") {
                 SettingsGroupCard(
                     listOf(
-                        SettingItem(
-                            title = stringResource(R.string.settings_check_update),
-                            description = stringResource(R.string.settings_check_update_summary),
-                            icon = Icons.Rounded.AccessTime,
-                            action = {
-                                com.kira.harmoid.UpdateChecker.check(context) { result ->
-                                    updateMessage = describeUpdate(context, result)
-                                    updateHasNewVersion = result is com.kira.harmoid.UpdateChecker.Result.UpdateAvailable
-                                }
-                            },
-                        ),
                         SettingItem(
                             title = stringResource(R.string.settings_feedback),
                             description = stringResource(R.string.settings_feedback_summary),
@@ -504,40 +490,6 @@ fun SettingsScreen(
             }
         )
     }
-
-    updateMessage?.let { message ->
-        WindowDialog(
-            show = true,
-            onDismissRequest = { updateMessage = null },
-            title = stringResource(R.string.settings_check_update),
-            summary = message,
-            content = {
-                Row {
-                    TextButton(
-                        text = stringResource(R.string.cancel),
-                        onClick = { updateMessage = null },
-                        modifier = Modifier.weight(1f),
-                    )
-                    if (updateHasNewVersion) {
-                        Spacer(Modifier.width(16.dp))
-                        TextButton(
-                            text = stringResource(R.string.update_dialog_go),
-                            onClick = {
-                                updateMessage = null
-                                context.startActivity(
-                                    Intent(
-                                        Intent.ACTION_VIEW,
-                                        android.net.Uri.parse("https://github.com/harmony-on-android/HOA/releases")
-                                    )
-                                )
-                            },
-                            modifier = Modifier.weight(1f),
-                        )
-                    }
-                }
-            }
-        )
-    }
 }
 
 @Composable
@@ -622,19 +574,6 @@ private fun DeviceField(label: String, value: String, onValueChange: (String) ->
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
     )
-}
-
-/** 把更新检查结果翻译成一句人话；与 UI 无关，方便单测。 */
-private fun describeUpdate(
-    context: Context,
-    result: com.kira.harmoid.UpdateChecker.Result,
-): String = when (result) {
-    is com.kira.harmoid.UpdateChecker.Result.UpdateAvailable ->
-        context.getString(R.string.update_dialog_msg, result.date)
-    com.kira.harmoid.UpdateChecker.Result.UpToDate ->
-        context.getString(R.string.update_dialog_uptodate)
-    is com.kira.harmoid.UpdateChecker.Result.Error ->
-        context.getString(R.string.update_error_fmt, result.message)
 }
 
 private fun isHdcRunning(context: Context): Boolean {

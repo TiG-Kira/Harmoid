@@ -14,15 +14,13 @@ import java.util.Locale
 /**
  * 更新检查：查 Harmoid 自己的 GitHub Release（TiG-Kira/Harmoid）。
  *
- * 注意：仓库当前是 **private**，匿名访问 GitHub releases API 会 404
- * （Result.Error 路径会提示"检查失败"）。等仓库转公开，或配置一个
- * 只读 token 加进请求头后即可正常检查。
+ * 仓库公开，匿名访问 releases API 正常；唯一的更新入口在「关于」页。
  */
 object UpdateChecker {
 
     private const val TAG = "Harmoid.UpdateChecker"
     private const val RELEASES_URL = "https://api.github.com/repos/TiG-Kira/Harmoid/releases"
-    private const val DOWNLOAD_URL = "https://github.com/TiG-Kira/Harmoid/releases"
+    private const val DOWNLOAD_URL = "https://github.com/TiG-Kira/Harmoid/releases/latest"
 
     sealed class Result {
         data class UpdateAvailable(val date: String) : Result()
@@ -96,7 +94,7 @@ object UpdateChecker {
             }
             is Result.UpToDate -> {
                 AlertDialog.Builder(context)
-                    .setTitle(context.getString(R.string.update_dialog_title))
+                    .setTitle(context.getString(R.string.check_updates))
                     .setMessage(context.getString(R.string.update_dialog_uptodate))
                     .setPositiveButton(android.R.string.ok, null)
                     .show()
