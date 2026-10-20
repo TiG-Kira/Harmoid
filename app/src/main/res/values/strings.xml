@@ -180,7 +180,7 @@
     <string name="device_model">Device model</string>
     <string name="android_version">Android version</string>
     <string name="kernel_version">Kernel version</string>
-    <string name="developer_name">Developer</string>
+    <string name="developer_name">Kira</string>
     <string name="about_developer_summary">@TiG-Kira</string>
     <string name="check_updates">Check for updates</string>
     <string name="about_check_updates_desc">Tap to look for a newer Harmoid release</string>
