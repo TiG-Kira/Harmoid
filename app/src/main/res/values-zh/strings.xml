@@ -181,7 +181,7 @@
     <string name="device_model">设备型号</string>
     <string name="android_version">Android 版本</string>
     <string name="kernel_version">内核版本</string>
-    <string name="developer_name">开发者</string>
+    <string name="developer_name">极犽</string>
     <string name="about_developer_summary">@TiG-Kira</string>
     <string name="check_updates">检查更新</string>
     <string name="about_check_updates_desc">点击检查是否有更新的 Harmoid 版本</string>
