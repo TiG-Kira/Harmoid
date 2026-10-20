@@ -118,6 +118,19 @@ public class WebCookiePlugin {
     }
 
     /**
+     * Set cookie value synchronously (legacy two-argument signature).
+     *
+     * <p>Kept for compatibility with older libweb_webview builds whose JNI glue resolves
+     * {@code configCookieSync(Ljava/lang/String;Ljava/lang/String;)V}.</p>
+     *
+     * @param url url
+     * @param stringCookie cookie value in Set-Cookie format
+     */
+    public void configCookieSync(String url, String stringCookie) {
+        configCookieSync(url, stringCookie, false, false);
+    }
+
+    /**
      * Set cookie value synchronously.
      *
      * <p>Android public WebKit APIs only expose the shared cookie jar. The incognito and
@@ -158,6 +171,20 @@ public class WebCookiePlugin {
             cookies = "";
         }
         onReceiveCookieValue(cookies, asyncCallbackInfoId);
+    }
+
+    /**
+     * Get cookie value synchronously (legacy single-url signature).
+     *
+     * <p>Kept for compatibility with older libweb_webview builds whose JNI glue resolves
+     * {@code fetchCookieSync(Ljava/lang/String;)Ljava/lang/String;}. Newer callers should
+     * use {@link #fetchCookieSync(String, boolean)}.</p>
+     *
+     * @param url url
+     * @return cookie string, or null when url is invalid
+     */
+    public String fetchCookieSync(String url) {
+        return fetchCookieSync(url, false);
     }
 
     /**
@@ -216,6 +243,16 @@ public class WebCookiePlugin {
                 onReceiveCookieValue(asyncCallbackInfoId);
             }
         });
+    }
+
+    /**
+     * Clear all cookies synchronously (legacy no-arg signature).
+     *
+     * <p>Kept for compatibility with older libweb_webview builds; clears the shared cookie
+     * store (equivalent to {@code clearAllCookiesSync(false)}).</p>
+     */
+    public void clearAllCookiesSync() {
+        clearAllCookiesSync(false);
     }
 
     /**
@@ -286,6 +323,37 @@ public class WebCookiePlugin {
     public boolean existCookie(boolean incognito) {
         CookieManager.getInstance().flush();
         return CookieManager.getInstance().hasCookies();
+    }
+
+    /**
+     * Query the global cookie acceptance policy (legacy no-arg signature).
+     *
+     * <p>Kept for compatibility with older libweb_webview builds whose JNI glue resolves
+     * {@code isCookieAllowed()Z}.</p>
+     *
+     * @return whether cookies are accepted for the shared cookie store
+     */
+    public boolean isCookieAllowed() {
+        return CookieManager.getInstance().acceptCookie();
+    }
+
+    /**
+     * Query the third-party cookie acceptance policy (legacy no-arg signature).
+     *
+     * <p>Kept for compatibility with older libweb_webview builds whose JNI glue resolves
+     * {@code isThirdPartyCookieAllowed()Z}. Android requires a WebView instance to query
+     * third-party cookie policy; the first registered Web object is used, and when none is
+     * registered yet the global default (same as {@link #isCookieAllowed()}) is reported.</p>
+     *
+     * @return whether third-party cookies are accepted
+     */
+    public boolean isThirdPartyCookieAllowed() {
+        for (Object webObject : getRegisteredWebObjects().values()) {
+            if (webObject instanceof android.webkit.WebView) {
+                return CookieManager.getInstance().acceptThirdPartyCookies((android.webkit.WebView) webObject);
+            }
+        }
+        return CookieManager.getInstance().acceptCookie();
     }
 
     /**
