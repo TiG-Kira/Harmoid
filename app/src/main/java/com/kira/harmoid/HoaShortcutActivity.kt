@@ -24,10 +24,14 @@ class HoaShortcutActivity : Activity() {
         // Forward OHOS want params (e.g. a notification click payload) so the
         // ability receives them even on a cold start.
         val wantParams = intent.getStringExtra("params")
-        val slot = ProcessSlotManager.launchHap(
-            this, bundleName, moduleName, abilityName, wantParams)
-        if (slot < 0) {
-            Toast.makeText(this, getString(R.string.dialog_no_slots_msg, ProcessSlotManager.MAX_SLOTS), Toast.LENGTH_LONG).show()
+        try {
+            val slot = ProcessSlotManager.launchHap(this, bundleName, moduleName, abilityName, wantParams)
+            if (slot < 0) {
+                Toast.makeText(this, getString(R.string.dialog_no_slots_msg, ProcessSlotManager.MAX_SLOTS), Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Shortcut launch failed", e)
+            Toast.makeText(this, getString(R.string.toast_error_fmt, e.message), Toast.LENGTH_LONG).show()
         }
         finish()
     }

@@ -59,6 +59,7 @@ internal fun DrawScope.drawGlassRim(
     surface: Color,
     alpha: Float,
 ) {
+    if (android.os.Build.VERSION.SDK_INT < 33) return
     val shader = rimShader ?: return
     if (alpha <= 0f || size.width <= 0f || size.height <= 0f) return
     if (style.background.unShade >= 0.999f) return
@@ -95,6 +96,7 @@ internal fun DrawScope.drawGlassStroke(
     stroke: GlassStroke,
     alpha: Float,
 ) {
+    if (android.os.Build.VERSION.SDK_INT < 33) return
     val shader = strokeShader ?: return
     if (alpha <= 0f || size.width <= 0f || size.height <= 0f) return
 
@@ -122,6 +124,7 @@ internal fun DrawScope.drawGlassStroke(
  * @param layoutDirection Resolves the shape's start and end corners.
  */
 internal fun DrawScope.drawGlassMask(shape: GlassShape, layoutDirection: LayoutDirection) {
+    if (android.os.Build.VERSION.SDK_INT < 33) return
     val shader = maskShader ?: return
     if (size.width <= 0f || size.height <= 0f) return
     shader.setSilhouetteUniforms(shape, layoutDirection, size, this)
@@ -185,6 +188,7 @@ internal fun DrawScope.drawGlassShadow(
     shadow: GlassShadow,
     alpha: Float,
 ) {
+    if (android.os.Build.VERSION.SDK_INT < 33) return
     val shader = shadowShader ?: return
     if (alpha <= 0f || size.width <= 0f || size.height <= 0f) return
 

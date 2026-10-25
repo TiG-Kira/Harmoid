@@ -16,10 +16,13 @@ class HapBundleLoader {
         }
     }
 
-    // Returns true if the file is a HarmonyOS .app package (a zip with pack.info).
+    // pack.info also appears in raw HAPs; only an outer container lacks module.json.
     fun isAppPackage(filePath: String): Boolean {
         return try {
-            ZipFile(filePath).use { zip -> zip.getEntry("pack.info") != null }
+            ZipFile(filePath).use { zip ->
+                zip.getEntry("pack.info") != null && zip.getEntry("module.json") == null &&
+                    zip.getEntry("module.json5") == null
+            }
         } catch (_: Exception) {
             false
         }
@@ -28,7 +31,6 @@ class HapBundleLoader {
     // Extracts the single .hap from a .app package.  Throws if the .app
     // contains zero or more than one .hap entries.
     fun unwrapSingleHap(appPath: String): String {
-        val hapTmp = java.io.File.createTempFile("hoa_app_hap_", ".hap")
         ZipFile(appPath).use { zip ->
             val hapEntries = zip.entries().asSequence()
                 .filter { !it.isDirectory && it.name.endsWith(".hap") }
@@ -37,10 +39,16 @@ class HapBundleLoader {
             when (hapEntries.size) {
                 0 -> throw HapParseException("No HAP found in .app package")
                 1 -> {
-                    zip.getInputStream(hapEntries[0]).use { input ->
-                        hapTmp.outputStream().use { out -> input.copyTo(out) }
+                    val hapTmp = java.io.File.createTempFile("hoa_app_hap_", ".hap")
+                    try {
+                        zip.getInputStream(hapEntries[0]).use { input ->
+                            hapTmp.outputStream().use { out -> input.copyTo(out) }
+                        }
+                        return hapTmp.absolutePath
+                    } catch (e: Exception) {
+                        hapTmp.delete()
+                        throw e
                     }
-                    return hapTmp.absolutePath
                 }
                 else -> throw HapParseException(
                     ".app contains ${hapEntries.size} HAPs — multi-HAP packages not supported yet"
@@ -75,8 +83,12 @@ class HapBundleLoader {
             ?: zip.getEntry("module.json5")
             ?: throw HapParseException("module.json not found in HAP")
 
-        val rawJson = zip.getInputStream(entry).bufferedReader().use { it.readText() }
-        return parseModuleJson(rawJson, zip)
+        return try {
+            val rawJson = zip.getInputStream(entry).bufferedReader().use { it.readText() }
+            parseModuleJson(rawJson, zip)
+        } catch (e: Exception) {
+            throw HapParseException("Cannot parse HAP module configuration", e)
+        }
     }
 
     internal fun parseModuleJson(rawJson: String, zip: ZipFile? = null): ModuleConfig {
@@ -85,16 +97,26 @@ class HapBundleLoader {
         // module.json has two possible structures:
         // 1. { "app": {...}, "module": {...} }  — full config with bundleName at top
         // 2. { "module": {...} }                 — module-only, bundleName from pack.info
-        val appObj = root.optJSONObject("app")
+        var appObj = root.optJSONObject("app")
         val moduleObj = root.getJSONObject("module")
 
-        val bundleName = appObj?.optString("bundleName", "") ?: ""
+        var bundleName = appObj?.optString("bundleName", "") ?: ""
+        if (bundleName.isBlank() && zip != null) {
+            val pack = extractPackInfo(zip)
+            if (pack != null && pack.bundleName.isNotBlank()) {
+                bundleName = pack.bundleName
+                val normalizedApp = appObj ?: JSONObject().also { root.put("app", it) }
+                normalizedApp.put("bundleName", bundleName)
+                if (!normalizedApp.has("versionCode")) normalizedApp.put("versionCode", pack.versionCode)
+                if (!normalizedApp.has("versionName")) normalizedApp.put("versionName", pack.versionName)
+                appObj = normalizedApp
+            }
+        }
         val label = appObj?.optString("label", "") ?: ""
         val vendor = appObj?.optString("vendor", "") ?: ""
         val versionCode = appObj?.optInt("versionCode", 1) ?: 1
         val versionName = appObj?.optString("versionName", "1.0.0") ?: "1.0.0"
-        val apiVersion = appObj?.optInt("apiReleaseType", 0)
-            ?: appObj?.optInt("apiVersion", 0) ?: 0
+        val apiVersion = appObj?.optInt("apiVersion", 0) ?: 0
         val compileSdkVersion = appObj?.optString("compileSdkVersion", "") ?: ""
         val targetApiVersion = appObj?.optInt("targetAPIVersion", 0) ?: 0
         val minApiVersion = appObj?.optInt("minAPIVersion", 0) ?: 0
@@ -136,7 +158,7 @@ class HapBundleLoader {
             pages = pages,
             abilities = abilities,
             requestPermissions = requestPermissions,
-            rawJson = rawJson,
+            rawJson = root.toString(),
             iconId = appIconId
         )
     }
@@ -200,10 +222,11 @@ class HapBundleLoader {
                 val root = JSONObject(rawJson)
                 val summary = root.optJSONObject("summary") ?: return null
                 val app = summary.optJSONObject("app") ?: return null
+                val version = app.optJSONObject("version") ?: app
                 PackInfo(
                     bundleName = app.optString("bundleName", ""),
-                    versionCode = app.optInt("versionCode", 0),
-                    versionName = app.optString("versionName", "")
+                    versionCode = version.optInt("code", app.optInt("versionCode", 0)),
+                    versionName = version.optString("name", app.optString("versionName", ""))
                 )
             } catch (_: Exception) {
                 null
@@ -284,36 +307,38 @@ class HapBundleLoader {
             // Skip KeyConfigs to find IdSetHeader
             var pos = 140
             for (i in 0 until keyCount) {
-                if (pos + 12 > data.size) return null
+                if (!hasRange(data, pos, 12)) return null
                 val tag = String(data, pos, 4, Charsets.UTF_8)
                 if (tag != "KEYS") return null
                 val kpCount = readInt32LE(data, pos + 8)
-                if (kpCount > 20) return null
+                if (kpCount < 0 || kpCount > 20) return null
                 pos += 12 + kpCount * 8
             }
 
             // Parse IdSetHeader
-            if (pos + 16 > data.size) return null
+            if (!hasRange(data, pos, 16)) return null
             val idssTag = String(data, pos, 4, Charsets.UTF_8)
             if (idssTag != "IDSS") return null
             val typeCount = readInt32LE(data, pos + 8)
+            if (typeCount < 0 || typeCount > data.size / 12) return null
             pos += 16
 
             // Search through ResTypeHeaders and ResIndex entries for target name
             for (t in 0 until typeCount) {
-                if (pos + 12 > dataBlockOffset) return null
+                if (!hasRange(data, pos, 12) || pos > dataBlockOffset - 12) return null
                 // val resType = readInt32LE(data, pos + 0)
                 // val typeLen  = readInt32LE(data, pos + 4)
                 val count = readInt32LE(data, pos + 8)
+                if (count < 0 || count > data.size / 12) return null
                 pos += 12
 
                 for (i in 0 until count) {
-                    if (pos + 12 > dataBlockOffset) return null
+                    if (!hasRange(data, pos, 12) || pos > dataBlockOffset - 12) return null
                     // val resId = readInt32LE(data, pos)
                     val resInfoOffset = readInt32LE(data, pos + 4)
                     val nameLen = readInt32LE(data, pos + 8)
                     if (nameLen <= 0 || nameLen > 200) return null
-                    if (pos + 12 + nameLen > data.size) return null
+                    if (!hasRange(data, pos, 12 + nameLen) || pos > dataBlockOffset - 12 - nameLen) return null
 
                     val name = String(data, pos + 12, nameLen, Charsets.UTF_8)
                     if (name == targetKey) {
@@ -330,21 +355,21 @@ class HapBundleLoader {
         private fun readV2Value(data: ByteArray, resInfoOffset: Int): String? {
             // ResInfo at resInfoOffset: resId[4] length[4] valueCount[4]
             // then valueCount x (configId[4] dataOffset[4])
-            if (resInfoOffset + 12 > data.size) return null
+            if (!hasRange(data, resInfoOffset, 12)) return null
 
             val valueCount = readInt32LE(data, resInfoOffset + 8)
             if (valueCount <= 0 || valueCount > 50) return null
 
             // Use the first variant's dataOffset
             val pairPos = resInfoOffset + 12
-            if (pairPos + 8 > data.size) return null
+            if (!hasRange(data, pairPos, 8)) return null
             // val configId = readInt32LE(data, pairPos)  // not needed
             val dataOffset = readInt32LE(data, pairPos + 4)
-            if (dataOffset <= 0 || dataOffset + 2 > data.size) return null
+            if (dataOffset <= 0 || !hasRange(data, dataOffset, 2)) return null
 
             val dataLen = readUInt16LE(data, dataOffset)
             if (dataLen <= 0 || dataLen > 5000) return null
-            if (dataOffset + 2 + dataLen > data.size) return null
+            if (!hasRange(data, dataOffset, 2 + dataLen)) return null
 
             return String(data, dataOffset + 2, dataLen, Charsets.UTF_8)
         }
@@ -364,15 +389,15 @@ class HapBundleLoader {
 
             var pos = 136
             for (ki in 0 until keyCount) {
-                if (pos + 12 > data.size) return null
+                if (!hasRange(data, pos, 12)) return null
                 val tag = String(data, pos, 4, Charsets.UTF_8)
                 if (tag != "KEYS") return null
                 val idssOffset = readInt32LE(data, pos + 4)
                 val kpCount = readInt32LE(data, pos + 8)
-                if (kpCount > 20) return null
+                if (kpCount < 0 || kpCount > 20) return null
                 pos += 12 + kpCount * 8
 
-                if (idssOffset + 8 > data.size) continue
+                if (!hasRange(data, idssOffset, 8)) continue
                 val idssTag = String(data, idssOffset, 4, Charsets.UTF_8)
                 if (idssTag != "IDSS") continue
                 val idCount = readInt32LE(data, idssOffset + 4)
@@ -380,12 +405,12 @@ class HapBundleLoader {
 
                 var ipPos = idssOffset + 8
                 for (ii in 0 until idCount) {
-                    if (ipPos + 8 > data.size) break
+                    if (!hasRange(data, ipPos, 8)) break
                     // val ipId = readInt32LE(data, ipPos)     // resource id — unused for key lookup
                     val itemOffset = readInt32LE(data, ipPos + 4)
                     ipPos += 8
 
-                    if (itemOffset + 12 > data.size) continue
+                    if (!hasRange(data, itemOffset, 12)) continue
                     val itemSize = readInt32LE(data, itemOffset)
                     val resType = readInt32LE(data, itemOffset + 4)
                     if (itemSize < 14 || itemSize > 5000) continue
@@ -400,7 +425,7 @@ class HapBundleLoader {
                                    resType == 17 || resType == 22)  // STRINGARRAY|INTARRAY|THEME|PLURALS|PATTERN
                     if (isArray) {
                         // arrayLen[2] + N strings (each: strLen[2]+value[strLen+1]) + trailing '\0'
-                        if (itemPos + 2 > data.size) continue
+                        if (!hasRange(data, itemPos, 2)) continue
                         val arrLen = readUInt16LE(data, itemPos)
                         if (arrLen < 1 || arrLen > 5000) continue
                         // Skip past the entire packed array (arrLen bytes of string data)
@@ -408,18 +433,18 @@ class HapBundleLoader {
                         itemPos += 2 + arrLen + 1
                     } else {
                         // valueLen[2] + value[valueLen] (valueLen includes '\0')
-                        if (itemPos + 2 > data.size) continue
+                        if (!hasRange(data, itemPos, 2)) continue
                         val valLen = readUInt16LE(data, itemPos)
                         if (valLen < 1 || valLen > 5000) continue
-                        if (itemPos + 2 + valLen > data.size) continue
+                        if (!hasRange(data, itemPos, 2 + valLen)) continue
                         val value = String(data, itemPos + 2, valLen - 1, Charsets.UTF_8)
                         itemPos += 2 + valLen
 
                         // Read name
-                        if (itemPos + 2 > data.size) continue
+                        if (!hasRange(data, itemPos, 2)) continue
                         val nameLen = readUInt16LE(data, itemPos)
                         if (nameLen < 1 || nameLen > 200) continue
-                        if (itemPos + 2 + nameLen > data.size) continue
+                        if (!hasRange(data, itemPos, 2 + nameLen)) continue
                         val name = String(data, itemPos + 2, nameLen - 1, Charsets.UTF_8)
 
                         if (name == targetKey) return value
@@ -462,28 +487,30 @@ class HapBundleLoader {
 
             var pos = 140
             for (i in 0 until keyCount) {
-                if (pos + 12 > data.size) return null
+                if (!hasRange(data, pos, 12)) return null
                 val kpCount = readInt32LE(data, pos + 8)
-                if (kpCount > 20) return null
+                if (kpCount < 0 || kpCount > 20) return null
                 pos += 12 + kpCount * 8
             }
 
-            if (pos + 16 > data.size) return null
+            if (!hasRange(data, pos, 16)) return null
             val typeCount = readInt32LE(data, pos + 8)
+            if (typeCount < 0 || typeCount > data.size / 12) return null
             pos += 16
 
             for (t in 0 until typeCount) {
-                if (pos + 12 > dataBlockOffset) return null
+                if (!hasRange(data, pos, 12) || pos > dataBlockOffset - 12) return null
                 val count = readInt32LE(data, pos + 8)
+                if (count < 0 || count > data.size / 12) return null
                 pos += 12
 
                 for (i in 0 until count) {
-                    if (pos + 12 > dataBlockOffset) return null
+                    if (!hasRange(data, pos, 12) || pos > dataBlockOffset - 12) return null
                     val resId = readInt32LE(data, pos)
                     val resInfoOffset = readInt32LE(data, pos + 4)
                     val nameLen = readInt32LE(data, pos + 8)
                     if (nameLen <= 0 || nameLen > 200) return null
-                    if (pos + 12 + nameLen > data.size) return null
+                    if (!hasRange(data, pos, 12 + nameLen) || pos > dataBlockOffset - 12 - nameLen) return null
 
                     if (resId == iconId) {
                         return readV2Value(data, resInfoOffset)
@@ -501,15 +528,15 @@ class HapBundleLoader {
 
             var pos = 136
             for (ki in 0 until keyCount) {
-                if (pos + 12 > data.size) return null
+                if (!hasRange(data, pos, 12)) return null
                 val tag = String(data, pos, 4, Charsets.UTF_8)
                 if (tag != "KEYS") return null
                 val idssOffset = readInt32LE(data, pos + 4)
                 val kpCount = readInt32LE(data, pos + 8)
-                if (kpCount > 20) return null
+                if (kpCount < 0 || kpCount > 20) return null
                 pos += 12 + kpCount * 8
 
-                if (idssOffset + 8 > data.size) continue
+                if (!hasRange(data, idssOffset, 8)) continue
                 val idssTag = String(data, idssOffset, 4, Charsets.UTF_8)
                 if (idssTag != "IDSS") continue
                 val idCount = readInt32LE(data, idssOffset + 4)
@@ -517,13 +544,13 @@ class HapBundleLoader {
 
                 var ipPos = idssOffset + 8
                 for (ii in 0 until idCount) {
-                    if (ipPos + 8 > data.size) break
+                    if (!hasRange(data, ipPos, 8)) break
                     val ipId = readInt32LE(data, ipPos)
                     val itemOffset = readInt32LE(data, ipPos + 4)
                     ipPos += 8
 
                     if (ipId != iconId) continue
-                    if (itemOffset + 12 > data.size) continue
+                    if (!hasRange(data, itemOffset, 12)) continue
                     val itemSize = readInt32LE(data, itemOffset)
                     val resType = readInt32LE(data, itemOffset + 4)
                     if (itemSize < 14 || itemSize > 5000) continue
@@ -532,15 +559,15 @@ class HapBundleLoader {
                     val isArray = (resType == 10 || resType == 11 || resType == 16 ||
                                    resType == 17 || resType == 22)
                     if (isArray) {
-                        if (itemPos + 2 > data.size) continue
+                        if (!hasRange(data, itemPos, 2)) continue
                         val arrLen = readUInt16LE(data, itemPos)
                         if (arrLen < 1 || arrLen > 5000) continue
                         itemPos += 2 + arrLen + 1
                     } else {
-                        if (itemPos + 2 > data.size) continue
+                        if (!hasRange(data, itemPos, 2)) continue
                         val valLen = readUInt16LE(data, itemPos)
                         if (valLen < 1 || valLen > 5000) continue
-                        if (itemPos + 2 + valLen > data.size) continue
+                        if (!hasRange(data, itemPos, 2 + valLen)) continue
                         return String(data, itemPos + 2, valLen - 1, Charsets.UTF_8)
                     }
                 }
@@ -585,14 +612,13 @@ class HapBundleLoader {
             if (config.iconId != 0) {
                 iconIds.add(config.iconId)
             }
-            if (iconIds.isEmpty()) return null
 
             // Try each iconId in order until one loads successfully.
             // This handles the case where the ability icon is an unsupported
             // format (e.g. SVG) but the app-level icon (layered PNG) works.
             for (iconId in iconIds) {
                 val iconPath = resolveMediaPathById(moduleDir, iconId) ?: continue
-                val iconFile = java.io.File(moduleDir, stripModulePrefix(iconPath))
+                val iconFile = resourceFile(moduleDir, iconPath) ?: continue
                 if (!iconFile.exists()) continue
 
                 val bitmap = when {
@@ -601,9 +627,14 @@ class HapBundleLoader {
                     iconFile.extension.equals("svg", ignoreCase = true) ->
                         loadSvgAsPng(iconFile)
                     else ->
-                        android.graphics.BitmapFactory.decodeFile(iconFile.absolutePath)
+                        decodeIconBitmap(iconFile)
                 }
                 if (bitmap != null) return bitmap
+            }
+            val appIcon = try { JSONObject(config.rawJson).optJSONObject("app")?.optString("icon", "") }
+                catch (_: Exception) { null }
+            for (reference in listOfNotNull(mainAbility?.icon, appIcon)) {
+                resolveMediaRef(moduleDir, reference)?.let { return it }
             }
             return null
         }
@@ -619,15 +650,21 @@ class HapBundleLoader {
                 val fgBitmap = resolveMediaRef(moduleDir, fgRef)
 
                 if (bgBitmap == null && fgBitmap == null) return null
-                val bg = bgBitmap ?: fgBitmap!!
-                val fg = fgBitmap ?: return bg
+                if (bgBitmap == null) return fgBitmap
+                if (fgBitmap == null) return bgBitmap
+                val bg = bgBitmap
+                val fg = fgBitmap
 
                 val width = maxOf(bg.width, fg.width)
                 val height = maxOf(bg.height, fg.height)
                 val result = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
                 val canvas = android.graphics.Canvas(result)
-                canvas.drawBitmap(bg, 0f, 0f, null)
-                canvas.drawBitmap(fg, 0f, 0f, null)
+                val destination = android.graphics.Rect(0, 0, width, height)
+                val paint = android.graphics.Paint(android.graphics.Paint.FILTER_BITMAP_FLAG)
+                canvas.drawBitmap(bg, null, destination, paint)
+                canvas.drawBitmap(fg, null, destination, paint)
+                bg.recycle()
+                if (fg !== bg) fg.recycle()
                 result
             } catch (_: Exception) { null }
         }
@@ -642,9 +679,9 @@ class HapBundleLoader {
                 val path = resolveMediaPathById(moduleDir, numericId)
                 if (path != null) {
                     val normalizedPath = stripModulePrefix(path)
-                    val file = java.io.File(moduleDir, normalizedPath)
+                    val file = resourceFile(moduleDir, normalizedPath) ?: return null
                     if (file.exists()) {
-                        return android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                        return decodeIconBitmap(file)
                     }
                 }
                 return null
@@ -654,9 +691,9 @@ class HapBundleLoader {
             val mediaPath = parseStringFromIndex(moduleDir, mediaKey)
             if (mediaPath != null) {
                 val normalizedPath = stripModulePrefix(mediaPath)
-                val file = java.io.File(moduleDir, normalizedPath)
+                val file = resourceFile(moduleDir, normalizedPath) ?: return null
                 if (file.exists()) {
-                    return android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                    return decodeIconBitmap(file)
                 }
             }
 
@@ -664,16 +701,37 @@ class HapBundleLoader {
             val mediaDir = java.io.File(moduleDir, "resources/base/media")
             if (mediaDir.isDirectory) {
                 for (ext in listOf("png", "jpg", "jpeg", "webp")) {
-                    val file = java.io.File(mediaDir, "$mediaKey.$ext")
+                    val file = resourceFile(moduleDir, "resources/base/media/$mediaKey.$ext") ?: continue
                     if (file.exists()) {
-                        return android.graphics.BitmapFactory.decodeFile(file.absolutePath)
+                        return decodeIconBitmap(file)
                     }
                 }
             }
             return null
         }
 
-        private fun stripModulePrefix(path: String): String {
+        private fun resourceFile(moduleDir: java.io.File, path: String): java.io.File? {
+            val normalized = stripModulePrefix(path)
+            if (!normalized.startsWith("resources/")) return null
+            return try { HapPaths.resolve(moduleDir, normalized) } catch (_: Exception) { null }
+        }
+
+        private fun decodeIconBitmap(file: java.io.File): android.graphics.Bitmap? {
+            val bounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            android.graphics.BitmapFactory.decodeFile(file.path, bounds)
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
+            var sample = 1
+            val dimension = maxOf(bounds.outWidth, bounds.outHeight).toLong()
+            while ((dimension + sample - 1) / sample > 512) sample *= 2
+            val options = android.graphics.BitmapFactory.Options().apply {
+                inSampleSize = sample
+                inScaled = false
+            }
+            return android.graphics.BitmapFactory.decodeFile(file.path, options)
+        }
+
+        internal fun stripModulePrefix(path: String): String {
+            if (path.startsWith("resources/")) return path
             val slashIdx = path.indexOf('/')
             return if (slashIdx > 0 && slashIdx < path.length - 1) {
                 path.substring(slashIdx + 1)
@@ -685,6 +743,9 @@ class HapBundleLoader {
             // Return null so callers fall back to the default icon.
             return null
         }
+
+        private fun hasRange(data: ByteArray, offset: Int, length: Int): Boolean =
+            offset >= 0 && length >= 0 && offset <= data.size - length
 
         private fun readInt32LE(data: ByteArray, offset: Int): Int {
             var result = data[offset].toInt() and 0xFF

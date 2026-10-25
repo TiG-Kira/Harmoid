@@ -23,7 +23,7 @@ import android.os.BatteryManager;
 import android.os.Bundle;
 import android.text.TextUtils;
 
-import java.util.HashMap;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.Iterator;
 import java.util.Map;
 
@@ -52,10 +52,6 @@ public class BroadcastPlugin {
 
     private static final int BATTERY_FULL_VALUE = 100;
 
-    private static boolean BATTERY_LOW_FLAG = false;
-
-    private static boolean BATTERY_NORMAL_FLAG = false;
-
     private Context context;
 
     private Map<String, BroadcastReceiver> broadcastReceiverMap;
@@ -71,7 +67,7 @@ public class BroadcastPlugin {
         } else {
             ALog.e(LOG_TAG, "context is null");
         }
-        this.broadcastReceiverMap = new HashMap<>();
+        this.broadcastReceiverMap = new ConcurrentHashMap<>();
         nativeInit();
     }
 
@@ -87,7 +83,7 @@ public class BroadcastPlugin {
         } else {
             ALog.e(LOG_TAG, "context is null");
         }
-        this.broadcastReceiverMap = new HashMap<>();
+        this.broadcastReceiverMap = new ConcurrentHashMap<>();
         if (isNativeInit) {
             nativeInit();
         }
@@ -198,74 +194,54 @@ public class BroadcastPlugin {
      * @param actions actions of the broadcast
      * @return true if register broadcast success, false if register broadcast failed
      */
-    public boolean registerBroadcast(String key, String[] actions) {
-        if (context == null) {
-            return false;
-        }
-        if (TextUtils.isEmpty(key)) {
-            return false;
-        }
-        if (actions == null || actions.length == 0) {
-            return false;
-        }
-        BroadcastReceiver broadcastReceiver;
+    public synchronized boolean registerBroadcast(String key, String[] actions) {
+        if (context == null || TextUtils.isEmpty(key) || actions == null || actions.length == 0) return false;
         IntentFilter filter = new IntentFilter();
+        boolean low = false, okay = false;
         for (String action : actions) {
-            if (Intent.ACTION_BATTERY_LOW.equals(action)
-                || Intent.ACTION_BATTERY_OKAY.equals(action)) {
-                filter.addAction(Intent.ACTION_BATTERY_CHANGED);
-            } else {
-                filter.addAction(action);
-            }
+            if (TextUtils.isEmpty(action)) return false;
+            if (Intent.ACTION_BATTERY_LOW.equals(action)) low = true;
+            if (Intent.ACTION_BATTERY_OKAY.equals(action)) okay = true;
+            filter.addAction(Intent.ACTION_BATTERY_LOW.equals(action) || Intent.ACTION_BATTERY_OKAY.equals(action)
+                    ? Intent.ACTION_BATTERY_CHANGED : action);
         }
-        broadcastReceiver = new BroadcastReceiver() {
-            @Override
-            public void onReceive(Context context, Intent intent) {
+        final boolean wantsLow = low, wantsOkay = okay;
+        if (!unRegisterBroadcast(key)) return false;
+        BroadcastReceiver receiver = new BroadcastReceiver() {
+            private Boolean lastBatteryLow;
+            @Override public void onReceive(Context receiverContext, Intent intent) {
+                if (intent == null || broadcastReceiverMap.get(key) != this) return;
+                String action = intent.getAction();
+                if (action == null) return;
+                if (Intent.ACTION_BATTERY_CHANGED.equals(action) && (wantsLow || wantsOkay)) {
+                    int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1);
+                    int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 0);
+                    if (scale <= 0 || level < 0) return;
+                    boolean isLow = (long) level * BATTERY_FULL_VALUE / scale <= BATTERY_LOW_VALUE;
+                    if (lastBatteryLow != null && lastBatteryLow == isLow) return;
+                    lastBatteryLow = isLow;
+                    if (isLow && wantsLow) action = Intent.ACTION_BATTERY_LOW;
+                    else if (!isLow && wantsOkay) action = Intent.ACTION_BATTERY_OKAY;
+                    else return;
+                }
                 try {
-                    receiveBroadcast(findReceiverKey(this), intent, buildReceivePayload(intent));
+                    nativeReceiveBroadcast(key, action, buildReceivePayload(intent));
                 } catch (JSONException e) {
-                    ALog.e(LOG_TAG, "Receive broadcast failed, JSONException.");
-                    e.printStackTrace();
+                    ALog.e(LOG_TAG, "Receive broadcast failed: " + e.getMessage());
                 }
             }
         };
-        context.registerReceiver(broadcastReceiver, filter);
-        broadcastReceiverMap.put(key, broadcastReceiver);
-        return true;
-    }
-
-    private void receiveBroadcast(String key, Intent intent, String json) {
-        ALog.i(LOG_TAG, " receiveBroadcast " + key);
-        if (Intent.ACTION_BATTERY_CHANGED.equals(intent.getAction())) {
-            int level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, 0);
-            int scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, BATTERY_FULL_VALUE);
-            int batteryPercent = level * BATTERY_FULL_VALUE / scale;
-            if (batteryPercent <= BATTERY_LOW_VALUE
-                && key.contains("usual.event.BATTERY_LOW")
-                && !BATTERY_LOW_FLAG) {
-                    nativeReceiveBroadcast(key, Intent.ACTION_BATTERY_LOW, json);
-                    BATTERY_LOW_FLAG = true;
-                    BATTERY_NORMAL_FLAG = false;
-            }
-            if (batteryPercent > BATTERY_LOW_VALUE
-                && key.contains("usual.event.BATTERY_OKAY")
-                && !BATTERY_NORMAL_FLAG) {
-                    nativeReceiveBroadcast(key, Intent.ACTION_BATTERY_OKAY, json);
-                    BATTERY_NORMAL_FLAG = true;
-                    BATTERY_LOW_FLAG = false;
-            }
-        } else {
-            nativeReceiveBroadcast(key, intent.getAction(), json);
+        // Publish before registration: Android may deliver a sticky broadcast immediately.
+        broadcastReceiverMap.put(key, receiver);
+        try {
+            androidx.core.content.ContextCompat.registerReceiver(context, receiver, filter,
+                    androidx.core.content.ContextCompat.RECEIVER_EXPORTED);
+            return true;
+        } catch (IllegalArgumentException | SecurityException e) {
+            broadcastReceiverMap.remove(key, receiver);
+            ALog.e(LOG_TAG, "Register broadcast failed: " + e.getMessage());
+            return false;
         }
-    }
-
-    private String findReceiverKey(BroadcastReceiver receiver) {
-        for (Map.Entry<String, BroadcastReceiver> entry : broadcastReceiverMap.entrySet()) {
-            if (entry.getValue() == receiver) {
-                return entry.getKey();
-            }
-        }
-        return "";
     }
 
     private String buildReceivePayload(Intent intent) throws JSONException {
@@ -376,24 +352,17 @@ public class BroadcastPlugin {
      * @param key the key of broadcast
      * @return boolean whether the broadcast is unregistered successfully
      */
-    public boolean unRegisterBroadcast(String key) {
-        if (context == null) {
-            return false;
+    public synchronized boolean unRegisterBroadcast(String key) {
+        if (context == null || TextUtils.isEmpty(key)) return false;
+        BroadcastReceiver receiver = broadcastReceiverMap.remove(key);
+        if (receiver == null) return true;
+        try {
+            context.unregisterReceiver(receiver);
+            return true;
+        } catch (IllegalArgumentException e) {
+            ALog.w(LOG_TAG, "Receiver was already unregistered: " + key);
+            return true;
         }
-        if (TextUtils.isEmpty(key)) {
-            return false;
-        }
-        if (broadcastReceiverMap != null && broadcastReceiverMap.size() > 0) {
-            for (String mapKey : broadcastReceiverMap.keySet()) {
-                if (mapKey.equals(key)) {
-                    BroadcastReceiver broadcastReceiver = broadcastReceiverMap.get(mapKey);
-                    context.unregisterReceiver(broadcastReceiver);
-                    broadcastReceiver = null;
-                    break;
-                }
-            }
-        }
-        return true;
     }
 
     /**

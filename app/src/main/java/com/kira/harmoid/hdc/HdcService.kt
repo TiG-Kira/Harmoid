@@ -38,7 +38,8 @@ class HdcService : Service() {
         val notification = buildNotification()
         startForeground(NOTIFICATION_ID, notification)
 
-        if (daemon == null || daemon?.isRunning() == false) {
+        if (daemon?.port != currentPort || daemon?.isRunning() != true) {
+            daemon?.stop()
             daemon = HdcDaemon(applicationContext, currentPort)
             daemon?.start()
         }

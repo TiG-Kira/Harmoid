@@ -87,6 +87,7 @@ fun SettingsScreen(
     active: Boolean = true,
 ) {
     val context = LocalContext.current
+    val resources = androidx.compose.ui.platform.LocalResources.current
     val scope = rememberCoroutineScope()
     val snackbarHostState = remember { SnackbarHostState() }
     fun toast(message: String) {
@@ -176,7 +177,7 @@ fun SettingsScreen(
                                 val system = DeviceProfile.system()
                                 DeviceProfileStore.save(context, system)
                                 profile = system
-                                toast(context.getString(R.string.settings_device_restored))
+                                toast(resources.getString(R.string.settings_device_restored))
                             },
                         ),
                     )
@@ -225,11 +226,11 @@ fun SettingsScreen(
                                 if (enabled) {
                                     startHdcService(context, hdcPort)
                                     hdcRunning = true
-                                    toast(context.getString(R.string.toast_hdc_started, hdcPort))
+                                    toast(resources.getString(R.string.toast_hdc_started, hdcPort))
                                 } else {
                                     context.stopService(Intent(context, HdcService::class.java))
                                     hdcRunning = false
-                                    toast(context.getString(R.string.toast_hdc_stopped))
+                                    toast(resources.getString(R.string.toast_hdc_stopped))
                                 }
                             },
                         ),
@@ -362,7 +363,7 @@ fun SettingsScreen(
                                     }
                                     showPortDialog = false
                                 } else {
-                                    toast(context.getString(R.string.toast_hdc_invalid_port))
+                                    toast(resources.getString(R.string.toast_hdc_invalid_port))
                                 }
                             },
                             modifier = Modifier.weight(1f),
@@ -398,7 +399,7 @@ fun SettingsScreen(
                                 DeviceProfileStore.save(context, candidate)
                                 profile = candidate
                                 showDevicePicker = false
-                                toast(context.getString(R.string.settings_device_applied, candidate.displayName))
+                                toast(resources.getString(R.string.settings_device_applied, candidate.displayName))
                             },
                             startAction = { SettingIcon(Icons.Rounded.PhoneAndroid, null) },
                         )
@@ -416,7 +417,7 @@ fun SettingsScreen(
                 DeviceProfileStore.save(context, edited)
                 profile = edited
                 showDeviceEditor = false
-                toast(context.getString(R.string.settings_device_applied, edited.displayName))
+                toast(resources.getString(R.string.settings_device_applied, edited.displayName))
             },
         )
     }
@@ -467,7 +468,7 @@ fun SettingsScreen(
                             LogCollector.export(
                                 context,
                                 onComplete = { path -> LogCollector.share(context, path) },
-                                onError = { err -> toast(context.getString(R.string.toast_logs_export_failed, err)) },
+                                onError = { err -> toast(resources.getString(R.string.toast_logs_export_failed, err)) },
                             )
                         },
                         startAction = { SettingIcon(Icons.Rounded.BugReport, null) },

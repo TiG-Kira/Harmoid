@@ -110,6 +110,7 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+        if (intent.hasExtra("BUNDLE_NAME")) handleShortcutOrOpen(intent)
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -125,15 +126,26 @@ class MainActivity : ComponentActivity() {
         } catch (_: Exception) {
         }
         currentRefresh = null
+        currentOpenUri = null
     }
 
     /** 快捷方式启动（MIUI 可能把 Intent 重定向到 MainActivity）。 */
     private fun handleShortcutOrOpen(intent: Intent) {
         val bundle = intent.getStringExtra("BUNDLE_NAME")
         if (bundle != null) {
+            intent.removeExtra("BUNDLE_NAME") // Do not relaunch on host Activity recreation.
             val module = intent.getStringExtra("MODULE_NAME") ?: "entry"
             val ability = intent.getStringExtra("ABILITY_NAME") ?: "EntryAbility"
-            ProcessSlotManager.launchHap(this, bundle, module, ability)
+            try {
+                if (ProcessSlotManager.launchHap(this, bundle, module, ability, intent.getStringExtra("params")) < 0) {
+                    android.widget.Toast.makeText(this, getString(R.string.dialog_no_slots_msg,
+                        ProcessSlotManager.MAX_SLOTS), android.widget.Toast.LENGTH_LONG).show()
+                }
+            } catch (e: Exception) {
+                LogWriter.e(TAG, "Shortcut launch failed", e)
+                android.widget.Toast.makeText(this, getString(R.string.toast_error_fmt, e.message),
+                    android.widget.Toast.LENGTH_LONG).show()
+            }
             return
         }
         extractHapUri(intent)?.let { uri ->
@@ -154,8 +166,7 @@ class MainActivity : ComponentActivity() {
         return when (intent.action) {
             Intent.ACTION_VIEW -> intent.data
             Intent.ACTION_SEND -> {
-                @Suppress("DEPRECATION")
-                intent.getParcelableExtra(Intent.EXTRA_STREAM)
+                androidx.core.content.IntentCompat.getParcelableExtra(intent, Intent.EXTRA_STREAM, Uri::class.java)
             }
             else -> null
         }

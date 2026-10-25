@@ -18,6 +18,8 @@ import com.kira.harmoid.hap.InstalledHap
 import com.kira.harmoid.hap.ModuleConfig
 import com.kira.harmoid.logging.LogWriter
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -79,68 +81,78 @@ class HoaViewModel(app: Application) : AndroidViewModel(app) {
     private val _events = MutableSharedFlow<String>(extraBufferCapacity = 4)
     val events = _events.asSharedFlow()
 
-    /** 名称 → 图标缓存，避免每次重组重新解 resources.index。 */
-    private val iconCache = mutableMapOf<String, Bitmap?>()
+    private var refreshJob: Job? = null
+    private var previewJob: Job? = null
 
     fun refresh() {
-        viewModelScope.launch {
-            val loaded = withContext(Dispatchers.IO) {
-                installer.getInstalledHaps().map { hap ->
-                    val key = "${hap.bundleName}.${hap.moduleName}"
-                    val label = HapBundleLoader.resolveLabel(hap.contentDir, hap.moduleConfig)
-                    val icon = if (iconCache.containsKey(key)) {
-                        iconCache[key]
-                    } else {
-                        HapBundleLoader.loadHapIcon(hap.contentDir, hap.moduleConfig)
-                            .also { iconCache[key] = it }
+        refreshJob?.cancel()
+        refreshJob = viewModelScope.launch {
+            try {
+                val loaded = withContext(Dispatchers.IO) {
+                    installer.getInstalledHaps().map { hap ->
+                        val label = HapBundleLoader.resolveLabel(hap.contentDir, hap.moduleConfig)
+                        // HapItem already retains the bitmap across recompositions.
+                        // Re-read on refresh so upgrades cannot reuse stale icons.
+                        val icon = HapBundleLoader.loadHapIcon(hap.contentDir, hap.moduleConfig)
+                        HapItem(
+                            hap = hap,
+                            label = label,
+                            icon = icon,
+                            installedAt = hap.contentDir.lastModified(),
+                        )
                     }
-                    HapItem(
-                        hap = hap,
-                        label = label,
-                        icon = icon,
-                        installedAt = hap.contentDir.lastModified(),
-                    )
                 }
+                _items.value = loaded
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                LogWriter.e(TAG, "HAP list refresh failed", e)
+                _events.tryEmit("读取应用列表失败：${e.message}")
             }
-            _items.value = loaded
         }
     }
 
     /** 用户选完 HAP 文件后：先解出 module.json 做确认，不直接安装。 */
     fun previewFromUri(uri: Uri) {
-        viewModelScope.launch {
+        previewJob?.cancel()
+        previewJob = viewModelScope.launch {
+            val ownedFiles = mutableListOf<File>()
             _busy.value = true
             try {
-                val preview = withContext(Dispatchers.IO) {
-                    val tmpFile = File(
-                        getApplication<Application>().cacheDir,
-                        "hap_preview_${System.currentTimeMillis()}"
-                    )
+                val parsed = withContext(Dispatchers.IO) {
+                    val tmp = File.createTempFile("hap_preview_", ".hap", getApplication<Application>().cacheDir)
+                    ownedFiles.add(tmp)
                     getApplication<Application>().contentResolver.openInputStream(uri)?.use { input ->
-                        tmpFile.outputStream().use { out -> input.copyTo(out) }
+                        tmp.outputStream().use { input.copyTo(it) }
                     } ?: throw IllegalStateException("Cannot open selected file")
-
-                    var hapPath: String
-                    var config: ModuleConfig
+                    val loader = HapBundleLoader()
                     try {
-                        config = HapBundleLoader().previewConfig(tmpFile.absolutePath)
-                        hapPath = tmpFile.absolutePath
+                        InstallPreview(tmp, loader.previewConfig(tmp.path))
                     } catch (e: HapParseException) {
-                        if (!HapBundleLoader().isAppPackage(tmpFile.absolutePath)) throw e
-                        hapPath = HapBundleLoader().unwrapSingleHap(tmpFile.absolutePath)
-                        tmpFile.delete()
-                        config = HapBundleLoader().previewConfig(hapPath)
+                        if (!loader.isAppPackage(tmp.path)) throw e
+                        val hap = File(loader.unwrapSingleHap(tmp.path))
+                        ownedFiles.add(hap)
+                        InstallPreview(hap, loader.previewConfig(hap.path))
                     }
-                    InstallPreview(File(hapPath), config)
                 }
-                _preview.value = preview
+                _preview.value?.file?.delete()
+                _preview.value = parsed
+                ownedFiles.remove(parsed.file)
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 LogWriter.e(TAG, "HAP preview failed", e)
                 _events.tryEmit("安装包解析失败：${e.message}")
             } finally {
-                _busy.value = false
+                ownedFiles.forEach { it.delete() }
+                if (previewJob == coroutineContext[Job]) _busy.value = false
             }
         }
+    }
+
+    override fun onCleared() {
+        dismissPreview()
+        super.onCleared()
     }
 
     fun confirmInstall() {
@@ -171,17 +183,28 @@ class HoaViewModel(app: Application) : AndroidViewModel(app) {
 
     fun uninstall(hap: InstalledHap) {
         viewModelScope.launch {
-            withContext(Dispatchers.IO) { installer.uninstall(hap.bundleName) }
-            _events.tryEmit("已卸载 ${hap.bundleName}")
-            refresh()
+            try {
+                withContext(Dispatchers.IO) { installer.uninstall(hap.bundleName) }
+                _events.tryEmit("已卸载 ${hap.bundleName}")
+                refresh()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                LogWriter.e(TAG, "HAP uninstall failed", e)
+                _events.tryEmit("卸载失败：${e.message}")
+            }
         }
     }
 
     /** @return 是否成功分配到进程槽。 */
     fun launch(hap: InstalledHap): Boolean {
-        val slot = ProcessSlotManager.launchHap(
-            getApplication(), hap.bundleName, hap.moduleName, hap.mainAbility
-        )
+        val slot = try {
+            ProcessSlotManager.launchHap(getApplication(), hap.bundleName, hap.moduleName, hap.mainAbility)
+        } catch (e: Exception) {
+            LogWriter.e(TAG, "HAP launch failed", e)
+            _events.tryEmit("启动失败：${e.message}")
+            return false
+        }
         if (slot < 0) {
             _events.tryEmit("进程槽已满（最多 ${ProcessSlotManager.MAX_SLOTS} 个），请先关闭一个正在运行的 HAP")
             return false

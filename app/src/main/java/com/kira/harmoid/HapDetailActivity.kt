@@ -131,21 +131,14 @@ class HapDetailActivity : ComponentActivity() {
     }
 
     private fun launchHap() {
-        val slot = ProcessSlotManager.allocateSlot(this, contentDir.absolutePath)
-        if (slot < 0) {
-            Toast.makeText(this, getString(R.string.toast_slots_full_fmt, ProcessSlotManager.MAX_SLOTS), Toast.LENGTH_LONG).show()
-            return
+        try {
+            if (ProcessSlotManager.launchHap(this, bundleName, moduleName, mainAbility) < 0) {
+                Toast.makeText(this, getString(R.string.toast_slots_full_fmt, ProcessSlotManager.MAX_SLOTS), Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "HAP launch failed", e)
+            Toast.makeText(this, getString(R.string.toast_error_fmt, e.message), Toast.LENGTH_LONG).show()
         }
-        Log.e(TAG, "Launching HAP slot=$slot bundle=$bundleName/$moduleName/$mainAbility")
-        val intent = Intent().apply {
-            setClassName(packageName, "${packageName}.HoaAbilityActivity$slot")
-            putExtra("BUNDLE_NAME", bundleName)
-            putExtra("MODULE_NAME", moduleName)
-            putExtra("ABILITY_NAME", mainAbility)
-            putExtra("PROCESS_SLOT", slot)
-            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_NEW_DOCUMENT or Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-        }
-        startActivity(intent)
     }
 
     private fun dirSize(dir: File): Long {

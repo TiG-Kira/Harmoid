@@ -16,7 +16,7 @@ class HdcSession(
 
     private val input = BufferedInputStream(socket.getInputStream(), 65536)
     private val output = BufferedOutputStream(socket.getOutputStream(), 65536)
-    private val buffer = ByteArray(4194304) // 4 MB ring buffer
+    private val buffer = ByteArray(MAX_HDC_PACKET_SIZE)
     private var bufLen = 0
 
     @Volatile var running = true
@@ -171,7 +171,7 @@ class HdcSession(
         daemon.log("Session established: sid=$sessionId channelId=$channelId")
     }
 
-    fun sendPacket(commandFlag: Int, data: ByteArray) {
+    @Synchronized fun sendPacket(commandFlag: Int, data: ByteArray) {
         try {
             val pkt = buildPacket(peerChannelId, commandFlag, data)
             output.write(pkt)
@@ -191,10 +191,10 @@ class HdcSession(
         sendPacket(CMD_APP_FINISH, out.toByteArray())
     }
 
-    fun sendUninstallResult(msg: String) {
+    fun sendUninstallResult(msg: String, success: Boolean = true) {
         val out = ByteArrayOutputStream()
         out.write(2) // mode = APPMOD_UNINSTALL
-        out.write(1) // success
+        out.write(if (success) 1 else 0)
         out.write(msg.toByteArray(Charsets.UTF_8))
         sendPacket(CMD_APP_FINISH, out.toByteArray())
     }
@@ -221,11 +221,16 @@ class HdcSession(
     fun close() {
         running = false
         try { socket.close() } catch (_: Exception) {}
+        installHandler.close()
+        fileHandler.close()
+        shellHandler.close()
         daemon.removeSession(this)
     }
 
     /** Reset channel state after a one-shot command completes, keeping the TCP connection alive. */
     fun resetChannel() {
+        installHandler.close()
+        fileHandler.close()
         sessionEstablished = false
         sessionId = 0
         channelId = 0

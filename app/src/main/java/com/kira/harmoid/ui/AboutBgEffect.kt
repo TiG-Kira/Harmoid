@@ -94,9 +94,10 @@ object AboutBgEffect {
      *   controller.start()   // onAttached / onResume
      *   controller.stop()    // onDetached / onPause
      */
+    @androidx.annotation.RequiresApi(33)
     class ShaderController(
         private val target: View,
-        private val params: BgParams,
+        private var params: BgParams,
         @RawRes shaderResId: Int,
     ) {
         private val shader: RuntimeShader =
@@ -171,6 +172,7 @@ object AboutBgEffect {
 
         /** Rebind uniforms when dark-mode changes without tearing down the View. */
         fun updateParams(newParams: BgParams) {
+            params = newParams
             startColors = newParams.gradientColors2.copyOf()
             endColors = newParams.gradientColors2.copyOf()
             linearInterpolate(uColors, startColors, endColors, 0f)
@@ -235,7 +237,11 @@ object AboutBgEffect {
      * Entry point — returns null on API < 33 (caller should fall back to Brush).
      */
     fun createFor(target: View, isDark: Boolean): ShaderController? {
-        if (Build.VERSION.SDK_INT < 31) return null
-        return ShaderController(target, getParams(isDark), R.raw.about_bg_shader)
+        if (Build.VERSION.SDK_INT < 33) return null
+        return try { ShaderController(target, getParams(isDark), R.raw.about_bg_shader) }
+        catch (e: Exception) {
+            android.util.Log.w("Harmoid.About", "Background shader unavailable", e)
+            null
+        }
     }
 }

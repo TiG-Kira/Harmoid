@@ -53,7 +53,9 @@ public class BluetoothGattClient {
             super.onConnectionStateChange(gatt, status, newState);
             ALog.i(LOG_TAG, "onConnectionStateChange status is " + status + ", newState is " + newState);
             if (status != 0 && gatt != null) {
-                gatt.close();
+                try { gatt.close(); } catch (SecurityException e) {
+                    ALog.w(LOG_TAG, "Permission revoked before closing GATT");
+                }
             }
             Intent intent = new Intent(BluetoothPlugin.BLE_CLIENT_CONNECTION_STATE_CHANGE);
             intent.putExtra("appId", appId_);
@@ -189,76 +191,121 @@ public class BluetoothGattClient {
     }
 
     public int connect(Context context, BluetoothDevice device) {
-        int errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        if (context == null) {
-            ALog.e(LOG_TAG, "connect failed, context is null");
-            return errorCode;
-        }
-        if (device == null) {
-            ALog.e(LOG_TAG, "connect failed, device is null");
-            return errorCode;
-        }
-        try{
-            bluetoothGatt_ = device.connectGatt(context, false, gattCallback_, BluetoothDevice.TRANSPORT_LE);
-            if (bluetoothGatt_ == null) {
-                ALog.e(LOG_TAG, "connect failed, bluetoothGatt is null");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-            } else {
-                errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
+        try {
+            int errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            if (context == null) {
+                ALog.e(LOG_TAG, "connect failed, context is null");
+                return errorCode;
             }
-        } catch (IllegalArgumentException e) {
-            ALog.e(LOG_TAG, "connectGatt failed, error is " + e);
-            errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            if (device == null) {
+                ALog.e(LOG_TAG, "connect failed, device is null");
+                return errorCode;
+            }
+            try{
+                bluetoothGatt_ = device.connectGatt(context, false, gattCallback_, BluetoothDevice.TRANSPORT_LE);
+                if (bluetoothGatt_ == null) {
+                    ALog.e(LOG_TAG, "connect failed, bluetoothGatt is null");
+                    errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                } else {
+                    errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
+                }
+            } catch (IllegalArgumentException e) {
+                ALog.e(LOG_TAG, "connectGatt failed, error is " + e);
+                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+            return errorCode;
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "connect: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "connect: Bluetooth operation failed", e);
+            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
-        return errorCode;
     }
 
     public int discoverServices() {
-        if (bluetoothGatt_ != null) {
-            if (bluetoothGatt_.discoverServices()) {
-                return BluetoothErrorCode.BT_NO_ERROR.getId();
+        try {
+            if (bluetoothGatt_ != null) {
+                if (bluetoothGatt_.discoverServices()) {
+                    return BluetoothErrorCode.BT_NO_ERROR.getId();
+                } else {
+                    ALog.e(LOG_TAG, "native discoverServices result is false");
+                    return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                }
             } else {
-                ALog.e(LOG_TAG, "native discoverServices result is false");
+                ALog.e(LOG_TAG, "discoverServices failed, bluetoothGatt is null");
                 return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
             }
-        } else {
-            ALog.e(LOG_TAG, "discoverServices failed, bluetoothGatt is null");
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "discoverServices: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "discoverServices: Bluetooth operation failed", e);
             return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
     }
 
     public int disconnect() {
-        if (bluetoothGatt_ != null) {
-            bluetoothGatt_.disconnect();
-            return BluetoothErrorCode.BT_NO_ERROR.getId();
-        } else {
-            ALog.e(LOG_TAG, "disconnect failed, bluetoothGatt is null");
+        try {
+            if (bluetoothGatt_ != null) {
+                bluetoothGatt_.disconnect();
+                return BluetoothErrorCode.BT_NO_ERROR.getId();
+            } else {
+                ALog.e(LOG_TAG, "disconnect failed, bluetoothGatt is null");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "disconnect: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "disconnect: Bluetooth operation failed", e);
             return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
     }
 
     public int close() {
-        if (bluetoothGatt_ != null) {
-            bluetoothGatt_.close();
-            ALog.e(LOG_TAG, "close " + BluetoothErrorCode.BT_NO_ERROR.getId());
-            return BluetoothErrorCode.BT_NO_ERROR.getId();
-        } else {
-            ALog.e(LOG_TAG, "close failed, bluetoothGatt is null");
+        try {
+            if (bluetoothGatt_ != null) {
+                bluetoothGatt_.close();
+                ALog.e(LOG_TAG, "close " + BluetoothErrorCode.BT_NO_ERROR.getId());
+                return BluetoothErrorCode.BT_NO_ERROR.getId();
+            } else {
+                ALog.e(LOG_TAG, "close failed, bluetoothGatt is null");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "close: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "close: Bluetooth operation failed", e);
             return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
     }
 
     public int requestExchangeMtu(int mtu) {
-        if (bluetoothGatt_ == null) {
-            ALog.e(LOG_TAG, "requestExchangeMtu failed, bluetoothGatt_ is null");
-            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        } else {
-            if (bluetoothGatt_.requestMtu(mtu)) {
-                return BluetoothErrorCode.BT_NO_ERROR.getId();
-            } else {
-                ALog.e(LOG_TAG, "native requestMtu failed.");
+        try {
+            if (bluetoothGatt_ == null) {
+                ALog.e(LOG_TAG, "requestExchangeMtu failed, bluetoothGatt_ is null");
                 return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            } else {
+                if (bluetoothGatt_.requestMtu(mtu)) {
+                    return BluetoothErrorCode.BT_NO_ERROR.getId();
+                } else {
+                    ALog.e(LOG_TAG, "native requestMtu failed.");
+                    return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                }
             }
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "requestExchangeMtu: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "requestExchangeMtu: Bluetooth operation failed", e);
+            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
     }
 
@@ -284,15 +331,24 @@ public class BluetoothGattClient {
     }
 
     public int readCharacter(String sUuidString, String cUuidString) {
-        BluetoothGattCharacteristic characteristic = getCharacterForServices(sUuidString, cUuidString);
-        if (characteristic == null) {
-            ALog.e(LOG_TAG, "readCharacter failed, characteristic is null.");
-            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        }
-        if (bluetoothGatt_.readCharacteristic(characteristic)) {
-            return BluetoothErrorCode.BT_NO_ERROR.getId();
-        } else {
-            ALog.e(LOG_TAG, "native readCharacteristic failed.");
+        try {
+            BluetoothGattCharacteristic characteristic = getCharacterForServices(sUuidString, cUuidString);
+            if (characteristic == null) {
+                ALog.e(LOG_TAG, "readCharacter failed, characteristic is null.");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+            if (bluetoothGatt_.readCharacteristic(characteristic)) {
+                return BluetoothErrorCode.BT_NO_ERROR.getId();
+            } else {
+                ALog.e(LOG_TAG, "native readCharacteristic failed.");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "readCharacter: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "readCharacter: Bluetooth operation failed", e);
             return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
     }
@@ -309,72 +365,99 @@ public class BluetoothGattClient {
      * @return An error code indicating the result of the operation.
      */
     public int requestNotification(String sUuidString, String cUuidString, boolean enable) {
-        if (bluetoothGatt_ == null) {
-            ALog.e(LOG_TAG, "requestNotification failed, bluetoothGatt_ is null.");
+        try {
+            if (bluetoothGatt_ == null) {
+                ALog.e(LOG_TAG, "requestNotification failed, bluetoothGatt_ is null.");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+            BluetoothGattCharacteristic characteristic = getCharacterForServices(sUuidString, cUuidString);
+            if (characteristic == null) {
+                ALog.e(LOG_TAG, "requestNotification failed, characteristic is null.");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+            if (bluetoothGatt_.setCharacteristicNotification(characteristic, enable)) {
+                return BluetoothErrorCode.BT_NO_ERROR.getId();
+            }
+            ALog.e(LOG_TAG, "native setCharacteristicNotification failed.");
+            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "requestNotification: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "requestNotification: Bluetooth operation failed", e);
             return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
-        BluetoothGattCharacteristic characteristic = getCharacterForServices(sUuidString, cUuidString);
-        if (characteristic == null) {
-            ALog.e(LOG_TAG, "requestNotification failed, characteristic is null.");
-            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        }
-        if (bluetoothGatt_.setCharacteristicNotification(characteristic, enable)) {
-            return BluetoothErrorCode.BT_NO_ERROR.getId();
-        }
-        ALog.e(LOG_TAG, "native setCharacteristicNotification failed.");
-        return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
     }
 
     public int writeCharacter(String sUuidString, String cUuidString, byte[] value, int writeType) {
-        BluetoothGattCharacteristic characteristic = getCharacterForServices(sUuidString, cUuidString);
-        int errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        if (characteristic == null) {
-            return errorCode;
-        }
-        if (Build.VERSION.SDK_INT >= VERSION_TIRAMISU) {
-            try {
-                Method writeCharacteristicMethod = BluetoothGatt.class.getMethod("writeCharacteristic",
-                    BluetoothGattCharacteristic.class, byte[].class, int.class);
-                errorCode = (int) writeCharacteristicMethod.invoke(bluetoothGatt_, characteristic, value, writeType);
-                if (errorCode == WRITE_SUCCESS) {
-                    errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
-                } else {
-                    ALog.e(LOG_TAG, "native writeCharacter failed.");
+        try {
+            BluetoothGattCharacteristic characteristic = getCharacterForServices(sUuidString, cUuidString);
+            int errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            if (characteristic == null) {
+                return errorCode;
+            }
+            if (Build.VERSION.SDK_INT >= VERSION_TIRAMISU) {
+                try {
+                    Method writeCharacteristicMethod = BluetoothGatt.class.getMethod("writeCharacteristic",
+                        BluetoothGattCharacteristic.class, byte[].class, int.class);
+                    errorCode = (int) writeCharacteristicMethod.invoke(bluetoothGatt_, characteristic, value, writeType);
+                    if (errorCode == WRITE_SUCCESS) {
+                        errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
+                    } else {
+                        ALog.e(LOG_TAG, "native writeCharacter failed.");
+                        errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                    }
+                } catch (NoSuchMethodException e) {
+                    ALog.e(LOG_TAG, "writeCharacter failed, NoSuchMethodException.");
+                    errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                } catch (IllegalAccessException e) {
+                    ALog.e(LOG_TAG, "writeCharacter failed, IllegalAccessException.");
+                    errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                } catch (InvocationTargetException e) {
+                    ALog.e(LOG_TAG, "writeCharacter failed, InvocationTargetException.");
                     errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
                 }
-            } catch (NoSuchMethodException e) {
-                ALog.e(LOG_TAG, "writeCharacter failed, NoSuchMethodException.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-            } catch (IllegalAccessException e) {
-                ALog.e(LOG_TAG, "writeCharacter failed, IllegalAccessException.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-            } catch (InvocationTargetException e) {
-                ALog.e(LOG_TAG, "writeCharacter failed, InvocationTargetException.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-            }
-        } else {
-            characteristic.setValue(value);
-            characteristic.setWriteType(writeType);
-            if (bluetoothGatt_.writeCharacteristic(characteristic)) {
-                errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
             } else {
-                ALog.e(LOG_TAG, "native readCharacteristic failed.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                characteristic.setValue(value);
+                characteristic.setWriteType(writeType);
+                if (bluetoothGatt_.writeCharacteristic(characteristic)) {
+                    errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
+                } else {
+                    ALog.e(LOG_TAG, "native readCharacteristic failed.");
+                    errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                }
             }
+            return errorCode;
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "writeCharacter: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "writeCharacter: Bluetooth operation failed", e);
+            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
-        return errorCode;
     }
 
     public int readDescriptor(String sUuidString, String cUuidString, String dUuidString) {
-        BluetoothGattDescriptor descriptor = getDescriptorForServices(sUuidString, cUuidString, dUuidString);
-        if (descriptor == null) {
-            ALog.e(LOG_TAG, "readDescriptor failed, descriptor is null.");
-            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        }
-        if (bluetoothGatt_.readDescriptor(descriptor)) {
-            return BluetoothErrorCode.BT_NO_ERROR.getId();
-        } else {
-            ALog.e(LOG_TAG, "native readDescriptor failed.");
+        try {
+            BluetoothGattDescriptor descriptor = getDescriptorForServices(sUuidString, cUuidString, dUuidString);
+            if (descriptor == null) {
+                ALog.e(LOG_TAG, "readDescriptor failed, descriptor is null.");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+            if (bluetoothGatt_.readDescriptor(descriptor)) {
+                return BluetoothErrorCode.BT_NO_ERROR.getId();
+            } else {
+                ALog.e(LOG_TAG, "native readDescriptor failed.");
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "readDescriptor: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "readDescriptor: Bluetooth operation failed", e);
             return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
     }
@@ -410,41 +493,50 @@ public class BluetoothGattClient {
     }
 
     public int writeDescriptor(String sUuidString, String cUuidString, String dUuidString, byte[] value) {
-        BluetoothGattDescriptor descriptor =  getDescriptorForServices(sUuidString, cUuidString, dUuidString);
-        int errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        if (descriptor == null) {
-            return errorCode;
-        }
-        if (Build.VERSION.SDK_INT >= VERSION_TIRAMISU) {
-            try {
-                Method writeDescriptorMethod = 
-                    BluetoothGatt.class.getMethod("writeDescriptor", BluetoothGattDescriptor.class, byte[].class);
-                errorCode = (int) writeDescriptorMethod.invoke(bluetoothGatt_, descriptor, value);
-                if (errorCode == WRITE_SUCCESS) {
+        try {
+            BluetoothGattDescriptor descriptor =  getDescriptorForServices(sUuidString, cUuidString, dUuidString);
+            int errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            if (descriptor == null) {
+                return errorCode;
+            }
+            if (Build.VERSION.SDK_INT >= VERSION_TIRAMISU) {
+                try {
+                    Method writeDescriptorMethod =
+                        BluetoothGatt.class.getMethod("writeDescriptor", BluetoothGattDescriptor.class, byte[].class);
+                    errorCode = (int) writeDescriptorMethod.invoke(bluetoothGatt_, descriptor, value);
+                    if (errorCode == WRITE_SUCCESS) {
+                        errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
+                    } else {
+                        ALog.e(LOG_TAG, "native writeDescriptor failed.");
+                        errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                    }
+                } catch (NoSuchMethodException e) {
+                    ALog.e(LOG_TAG, "writeDescriptor failed, NoSuchMethodException.");
+                    errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                } catch (IllegalAccessException e) {
+                    ALog.e(LOG_TAG, "writeDescriptor failed, IllegalAccessException.");
+                    errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                } catch (InvocationTargetException e) {
+                    ALog.e(LOG_TAG, "writeDescriptor failed, InvocationTargetException.");
+                    errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+                }
+            } else {
+                descriptor.setValue(value);
+                if (bluetoothGatt_.writeDescriptor(descriptor)) {
                     errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
                 } else {
                     ALog.e(LOG_TAG, "native writeDescriptor failed.");
                     errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
                 }
-            } catch (NoSuchMethodException e) {
-                ALog.e(LOG_TAG, "writeDescriptor failed, NoSuchMethodException.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-            } catch (IllegalAccessException e) {
-                ALog.e(LOG_TAG, "writeDescriptor failed, IllegalAccessException.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-            } catch (InvocationTargetException e) {
-                ALog.e(LOG_TAG, "writeDescriptor failed, InvocationTargetException.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
             }
-        } else {
-            descriptor.setValue(value);
-            if (bluetoothGatt_.writeDescriptor(descriptor)) {
-                errorCode = BluetoothErrorCode.BT_NO_ERROR.getId();
-            } else {
-                ALog.e(LOG_TAG, "native writeDescriptor failed.");
-                errorCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-            }
+            return errorCode;
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "writeDescriptor: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "writeDescriptor: Bluetooth operation failed", e);
+            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
         }
-        return errorCode;
     }
 }

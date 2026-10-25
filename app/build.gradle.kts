@@ -163,6 +163,7 @@ dependencies {
 
     testImplementation(libs.junit)
     testImplementation("org.json:json:20231013")
+    testImplementation("org.robolectric:robolectric:4.17")
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(libs.androidx.junit)
 }

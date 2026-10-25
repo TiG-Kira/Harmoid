@@ -198,7 +198,7 @@ public class BluetoothHelper {
             boolean legacy = getValueFromJson(jsonObject, "legacy", Boolean.class);
             int phy = getValueFromJson(jsonObject, "phy", Integer.class);
             int callbackType = getValueFromJson(jsonObject, "callbackType", Integer.class);
-            if (reportDelayMillis < 0 || 
+            if (reportDelayMillis < 0 ||
                (phy != BluetoothDevice.PHY_LE_1M && phy != ScanSettings.PHY_LE_ALL_SUPPORTED) ||
                (scanMode < ScanSettings.SCAN_MODE_OPPORTUNISTIC || scanMode > ScanSettings.SCAN_MODE_LOW_LATENCY) ||
                (callbackType != ScanSettings.CALLBACK_TYPE_ALL_MATCHES &&
@@ -221,7 +221,22 @@ public class BluetoothHelper {
         }
     }
 
+    public static String scanDeviceName(ScanResult result) {
+        if (result == null) return "";
+        if (result.getScanRecord() != null && result.getScanRecord().getDeviceName() != null) {
+            return result.getScanRecord().getDeviceName();
+        }
+        try {
+            String name = result.getDevice() == null ? null : result.getDevice().getName();
+            return name == null ? "" : name;
+        } catch (SecurityException e) {
+            // SCAN can be granted without CONNECT; the advertised name is optional.
+            return "";
+        }
+    }
+
     public static String encapsulationBluetoothLeScanResults(ScanResult result) {
+        if (result == null || result.getDevice() == null) return "";
         try {
             String addr = result.getDevice().getAddress();
             if (addr == null || addr.isEmpty()) {
@@ -229,11 +244,12 @@ public class BluetoothHelper {
             }
             int rssi = result.getRssi();
             boolean connectable = result.isConnectable();
-            String name = result.getDevice().getName();
+            String name = scanDeviceName(result);
             if (name == null || name.isEmpty()) {
                 name = "";
             }
-            byte[] payload = result.getScanRecord().getBytes();
+            byte[] payload = result.getScanRecord() == null ? new byte[0] : result.getScanRecord().getBytes();
+            if (payload == null) payload = new byte[0];
             JSONArray array = new JSONArray();
             for (int i = 0; i < payload.length; i++) {
                 array.put(payload[i]);

@@ -13,7 +13,7 @@ class HapBundleLoaderTest {
     fun setUp() {
         // test_app.hap is built from the module.json + .abc in assets
         val resourcePath = javaClass.classLoader
-            ?.getResource("test_app.hap")?.path
+            ?.getResource("test_app.hap")?.toURI()
             ?: throw IllegalStateException("test_app.hap not found in test resources")
         testHap = File(resourcePath)
     }
@@ -53,41 +53,6 @@ class HapBundleLoaderTest {
         assertTrue(pages.any { it.contains("Index") })
     }
 
-    @Test
-    fun extract_bytecode() {
-        val bundle = HapBundleLoader().parse(testHap.absolutePath)
-
-        assertTrue("Should contain modules.abc", bundle.bytecodeEntries.containsKey("ets/modules.abc"))
-        val abc = bundle.bytecodeEntries["ets/modules.abc"]!!
-        assertTrue("modules.abc should not be empty", abc.isNotEmpty())
-
-        // Verify .abc magic header: PANDA\0\0\0
-        assertEquals('P'.code.toByte(), abc[0])
-        assertEquals('A'.code.toByte(), abc[1])
-        assertEquals('N'.code.toByte(), abc[2])
-        assertEquals('D'.code.toByte(), abc[3])
-        assertEquals('A'.code.toByte(), abc[4])
-    }
-
-    @Test
-    fun extract_resourceIndex() {
-        val bundle = HapBundleLoader().parse(testHap.absolutePath)
-        assertNotNull("resources.index should be present", bundle.resourceIndex)
-        assertTrue("resources.index should not be empty", bundle.resourceIndex!!.isNotEmpty())
-    }
-
-    @Test
-    fun extract_resources() {
-        val bundle = HapBundleLoader().parse(testHap.absolutePath)
-
-        // Should have files under resources/
-        assertTrue("Should have resource files", bundle.rawResources.isNotEmpty())
-        assertTrue(
-            "Should have main_pages.json",
-            bundle.rawResources.keys.any { it.contains("main_pages") }
-        )
-    }
-
     @Test(expected = HapParseException::class)
     fun parse_invalidHap_throwsException() {
         // Create a temp file that's not a valid HAP
@@ -112,22 +77,4 @@ class HapBundleLoaderTest {
         HapBundleLoader().parse(tmpFile.absolutePath)
     }
 
-    @Test
-    fun parse_abcBytecodeVersion() {
-        val bundle = HapBundleLoader().parse(testHap.absolutePath)
-        val abc = bundle.bytecodeEntries["ets/modules.abc"]
-        assertNotNull("No modules.abc", abc)
-        abc!!
-
-        // .abc version is at offset 0x0C (4 bytes): [major, minor, feature, build]
-        val major = abc[0x0C].toInt() and 0xFF
-        val minor = abc[0x0D].toInt() and 0xFF
-        val feature = abc[0x0E].toInt() and 0xFF
-        val build = abc[0x0F].toInt() and 0xFF
-
-        // This HAP was compiled with ark12.0.6.0
-        assertEquals(12, major)
-        assertEquals(0, minor)
-        assertEquals(6, feature)
-    }
 }

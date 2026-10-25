@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.18.1)
 project("hoa_native_stubs")
 
+# Build ELF validation/loading from this checkout, even when the large ArkUI-X
+# runtime and musl bridge are restored from an older prebuilt bundle.
+add_library(harmoid_elf SHARED src/main/cpp/elf_patch.c src/main/cpp/elf_patch_jni.c)
+target_compile_definitions(harmoid_elf PRIVATE HARMOID_STANDALONE_ELF)
+target_compile_options(harmoid_elf PRIVATE -fvisibility=hidden -Wall -Wextra)
+target_link_libraries(harmoid_elf PRIVATE dl log)
+
 # libace_napi.z.so — OHOS NAPI stub
 # Re-exports NAPI symbols from libarkui_android.so at runtime.
 # SONAME must be "libace_napi.z.so" to match OHOS HAP DT_NEEDED.

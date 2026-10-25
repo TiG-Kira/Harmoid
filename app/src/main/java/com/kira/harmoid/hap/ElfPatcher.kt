@@ -2,7 +2,7 @@ package com.kira.harmoid.hap
 
 object ElfPatcher {
     @JvmStatic
-    external fun patchSo(path: String): Boolean
+    fun patchSo(path: String): Boolean = ElfTools.patchSo(path)
 
     /**
      * Patch GOT entries for "sigaction" in a loaded .so to point to
@@ -13,13 +13,12 @@ object ElfPatcher {
     external fun patchGot(path: String): Int
 
     /**
-     * Load an .so via native dlopen(RTLD_GLOBAL), bypassing the
-     * Android classloader namespace so DT_NEEDED dependencies within
-     * the HAP can resolve each other's symbols.
+     * Load an .so via native dlopen(RTLD_GLOBAL), preloading sibling
+     * DT_NEEDED dependencies so their symbols are available to the HAP.
      * Returns 0 on success, -1 on failure.
      */
     @JvmStatic
-    external fun nativeLoad(path: String): Int
+    fun nativeLoad(path: String): Int = ElfTools.nativeLoad(path)
 
     /**
      * Patch DT_RUNPATH (and DT_RPATH) of an ELF .so to "$ORIGIN"
@@ -27,5 +26,14 @@ object ElfPatcher {
      * Returns true if a RUNPATH/RPATH was found and patched.
      */
     @JvmStatic
-    external fun patchRunpath(path: String): Boolean
+    fun patchRunpath(path: String): Boolean = ElfTools.patchRunpath(path)
+}
+
+/** Kept separate from libb.so so ELF fixes always ship with the APK build. */
+private object ElfTools {
+    init { System.loadLibrary("harmoid_elf") }
+
+    @JvmStatic external fun patchSo(path: String): Boolean
+    @JvmStatic external fun nativeLoad(path: String): Int
+    @JvmStatic external fun patchRunpath(path: String): Boolean
 }

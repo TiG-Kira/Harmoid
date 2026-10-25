@@ -1,6 +1,6 @@
 package com.kira.harmoid.ui.theme
 
-import android.app.Activity
+import com.kira.harmoid.bridge.ActivityTracker
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
@@ -42,7 +42,7 @@ fun HoaTheme(
     val view = LocalView.current
     if (!view.isInEditMode && manageSystemBars) {
         SideEffect {
-            val window = (view.context as Activity).window
+            val window = ActivityTracker.getActivity(view.context)?.window ?: return@SideEffect
             if (statusBarColor != Color.Unspecified) {
                 @Suppress("DEPRECATION")
                 window.statusBarColor = statusBarColor.toArgb()

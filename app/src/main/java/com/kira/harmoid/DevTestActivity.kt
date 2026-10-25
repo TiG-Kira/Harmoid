@@ -182,8 +182,13 @@ class DevTestActivity : AppCompatActivity() {
             return
         }
 
-        if (ProcessSlotManager.launchHap(this, bundle, module, ability) < 0) {
-            Toast.makeText(this, getString(R.string.toast_slots_full_fmt, ProcessSlotManager.MAX_SLOTS), Toast.LENGTH_LONG).show()
+        try {
+            if (ProcessSlotManager.launchHap(this, bundle, module, ability) < 0) {
+                Toast.makeText(this, getString(R.string.toast_slots_full_fmt, ProcessSlotManager.MAX_SLOTS), Toast.LENGTH_LONG).show()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "HAP launch failed", e)
+            Toast.makeText(this, getString(R.string.toast_error_fmt, e.message), Toast.LENGTH_LONG).show()
         }
     }
 

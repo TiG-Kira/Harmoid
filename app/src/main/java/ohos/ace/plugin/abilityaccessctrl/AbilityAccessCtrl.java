@@ -15,8 +15,6 @@
 
 package ohos.ace.plugin.abilityaccessctrl;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.Map;
 
@@ -57,6 +55,7 @@ public class AbilityAccessCtrl {
      * @return boolean
      */
     public boolean checkPermission(String permission) {
+        if (mContext == null || permission == null || permission.isEmpty()) return false;
         ALog.i(LOG_TAG, "AbilityAccessCtrl: check from java");
         PackageManager pm = mContext.getPackageManager();
         if (pm.checkPermission(permission, mContext.getPackageName()) == PackageManager.PERMISSION_GRANTED) {
@@ -74,52 +73,23 @@ public class AbilityAccessCtrl {
      * @param permissions The permission list to be requested.
      */
     public void requestPermissions(String[] permissions) {
+        if (permissions == null || permissions.length == 0) return;
         ALog.i(LOG_TAG, "AbilityAccessCtrl: request from java");
         ALog.i(LOG_TAG, "AbilityAccessCtrl: request  " + permissions.length);
         Activity curActivity = getActivity();
         if (curActivity == null) {
             return;
         }
-        Fragment fragment = getFragment(curActivity);
-        if (fragment != null) {
-            ALog.i(LOG_TAG, "AbilityAccessCtrl: fragment request");
-            fragment.requestPermissions(permissions, 1);
-        } else {
-            ALog.i(LOG_TAG, "AbilityAccessCtrl: curActivity request");
-            curActivity.requestPermissions(permissions, 1);
-        }
+        curActivity.runOnUiThread(() -> {
+            if (curActivity.isFinishing() || curActivity.isDestroyed()) return;
+            Fragment fragment = getFragment(curActivity);
+            if (fragment != null) fragment.requestPermissions(permissions, 1);
+            else curActivity.requestPermissions(permissions, 1);
+        });
     }
 
     private Activity getActivity() {
-        try {
-            Class activityThreadClass = Class.forName("android.app.ActivityThread");
-            Object activityThread = activityThreadClass.getMethod("currentActivityThread").invoke(null);
-            Field mActivities = activityThreadClass.getDeclaredField("mActivities");
-            mActivities.setAccessible(true);
-            Map activitiesMap = (Map) mActivities.get(activityThread);
-            for (Object activityClientRecord : activitiesMap.values()) {
-                Class activityClientRecordClass = activityClientRecord.getClass();
-                Field paused = activityClientRecordClass.getDeclaredField("paused");
-                paused.setAccessible(true);
-                if (!paused.getBoolean(activityClientRecord)) {
-                    Field activityField = activityClientRecordClass.getDeclaredField("activity");
-                    activityField.setAccessible(true);
-                    Activity activity = (Activity) activityField.get(activityClientRecord);
-                    return activity;
-                }
-            }
-        } catch (ClassNotFoundException e) {
-            e.printStackTrace();
-        } catch (InvocationTargetException e) {
-            e.printStackTrace();
-        } catch (NoSuchMethodException e) {
-            e.printStackTrace();
-        } catch (NoSuchFieldException e) {
-            e.printStackTrace();
-        } catch (IllegalAccessException e) {
-            e.printStackTrace();
-        }
-        return null;
+        return com.kira.harmoid.bridge.ActivityTracker.getActivity(mContext);
     }
 
     private Fragment getFragment(Activity curActivity) {
