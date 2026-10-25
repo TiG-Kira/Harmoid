@@ -11,17 +11,27 @@ import org.json.JSONObject
 import java.io.File
 
 open class HoaAbilityActivity : StageActivity() {
+    private var unregisterBackCallback: (() -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        val bundleName = intent.getStringExtra("BUNDLE_NAME") ?: "app.hackeris.harmonyexample"
-        val moduleName = intent.getStringExtra("MODULE_NAME") ?: "entry"
-        val abilityName = intent.getStringExtra("ABILITY_NAME") ?: "EntryAbility"
+        val bundleName = intent.getStringExtra("BUNDLE_NAME")?.takeIf { it.isNotBlank() }
+            ?: RuntimeErrorActivity.abortWorker(this, "Missing HAP bundle name")
+        val moduleName = intent.getStringExtra("MODULE_NAME")?.takeIf { it.isNotBlank() }
+            ?: RuntimeErrorActivity.abortWorker(this, "Missing HAP module name")
+        val abilityName = intent.getStringExtra("ABILITY_NAME")?.takeIf { it.isNotBlank() }
+            ?: RuntimeErrorActivity.abortWorker(this, "Missing HAP ability name")
         val slot = intent.getIntExtra("PROCESS_SLOT", -1)
 
-        if (slot >= 0) {
-            val contentDir = java.io.File(filesDir, "hap/$bundleName.$moduleName").absolutePath
+        try {
+            com.kira.harmoid.hap.HapPaths.validateNames(bundleName, moduleName)
+            check(slot in 0 until ProcessSlotManager.MAX_SLOTS) { "Invalid HAP process slot: $slot" }
+            val contentDir = File(filesDir, "hap/$bundleName.$moduleName").canonicalPath
+            check(ProcessSlotManager.getContentDir(this, slot) == contentDir) {
+                "Process slot $slot belongs to another HAP"
+            }
             ProcessSlotManager.claimSlot(this, slot, contentDir)
-            Log.e(TAG, "Process slot $slot claimed, PID=${android.os.Process.myPid()}, contentDir=$contentDir")
+        } catch (e: Exception) {
+            RuntimeErrorActivity.abortWorker(this, e.message ?: "Invalid HAP identity", e)
         }
 
         // Publish this process' HAP identity for the ArkUI-X plugins and the
@@ -35,60 +45,32 @@ open class HoaAbilityActivity : StageActivity() {
 
         // Check if StageApplication init succeeded
         val app = applicationContext as? HoaApplication
-        if (app != null && !app.initSuccess) {
-            Log.e(TAG, "StageApplication init FAILED — ArkUI rendering will not work")
-            Log.e(TAG, "  Error was: ${app.initError?.message}")
-            // 运行时没起来时继续走 super.onCreate() 只会在 native 里炸成
-            // SEGFAULT（Java catch 拦不住）。这里给出可见的错误并退栈。
-            //
-            // 但 super.onCreate() 必须被调用过一次：Android 15+ 把 mCalled 的
-            // 设置放进了 Activity 基类 onCreate，直接 return 会触发
-            // SuperNotCalledException 次生崩溃（对话框还没显示进程就死了，
-            // 26.10.19.2 AVD 实测）。基类 onCreate 是空实现风险低，仍然兜异常。
-            try {
-                super.onCreate(savedInstanceState)
-                Log.e(TAG, "super.onCreate() called in guard path (mCalled satisfied)")
-            } catch (e: Throwable) {
-                Log.e(TAG, "super.onCreate() in guard path failed", e)
-            }
-            android.app.AlertDialog.Builder(this)
-                .setTitle(R.string.dialog_init_failed_title)
-                .setMessage(getString(R.string.dialog_init_failed_msg, app.initError?.message ?: "unknown"))
-                .setPositiveButton(R.string.ok) { _, _ -> finish() }
-                .setOnCancelListener { finish() }
-                .show()
-            return
+        if (app?.initSuccess != true) {
+            RuntimeErrorActivity.abortWorker(this,
+                app?.initError?.message ?: "HarmonyOS runtime is not initialized", app?.initError)
         }
-
-        // Verify module exists before handing off to ArkUI-X runtime.
-        // If the module is not found, the runtime creates a null stage and crashes
-        // with StackOverflow in WindowViewSurface.onHoverEvent.
         if (!moduleExists(bundleName, moduleName)) {
-            Log.e(TAG, "Module not found: bundleName=$bundleName, moduleName=$moduleName")
-            Log.e(TAG, "  Checked: filesDir/hap/$bundleName.$moduleName/")
-            // 同守卫路径：先满足 Activity 契约再退栈，避免 SuperNotCalledException。
-            try {
-                super.onCreate(savedInstanceState)
-            } catch (e: Throwable) {
-                Log.e(TAG, "super.onCreate() in module-missing path failed", e)
-            }
-            android.widget.Toast.makeText(this, getString(R.string.toast_module_not_found, bundleName, moduleName), android.widget.Toast.LENGTH_LONG).show()
-            finish()
-            return
+            RuntimeErrorActivity.abortWorker(this, "HAP module not found: $bundleName.$moduleName")
         }
 
         try {
             setInstanceName(instanceName)
             Log.e(TAG, "setInstanceName() OK")
         } catch (e: Exception) {
-            Log.e(TAG, "setInstanceName() FAILED", e)
+            RuntimeErrorActivity.abortWorker(this, "Cannot set HAP instance: ${e.message}", e)
         }
 
         // Preload all .so files from the HAP libs directory so that
         // DT_NEEDED dependencies within the HAP resolve correctly.
         // Without this, libentry.so → libhelper.so fails because the
         // linker does not search the HAP extraction directory by default.
-        preloadNativeDeps(bundleName, moduleName)
+        try {
+            preloadNativeDeps(bundleName, moduleName)
+        } catch (e: LinkageError) {
+            RuntimeErrorActivity.abortWorker(this, "Native library initialization failed: ${e.message}", e)
+        } catch (e: Exception) {
+            RuntimeErrorActivity.abortWorker(this, "Native library initialization failed: ${e.message}", e)
+        }
 
         // 先让 decor 边到边，super.onCreate() 创建 SurfaceView 时窗口尺寸就是全屏；
         // 否则首帧会按"扣掉状态栏"的高度建表面，之后再改回来要闪一下。
@@ -109,15 +91,19 @@ open class HoaAbilityActivity : StageActivity() {
             super.onCreate(savedInstanceState)
             Log.e(TAG, "super.onCreate() completed — ArkUI rendering surface should be created")
             Log.e(TAG, "instanceId=${getInstanceId()}, instanceName=${getInstanceName()}")
-        } catch (e: UnsatisfiedLinkError) {
-            Log.e(TAG, "FATAL: Native library link error during Activity onCreate", e)
-            disableEdgeToEdgeNextLaunch(e)
+        } catch (e: LinkageError) {
+            RuntimeErrorActivity.abortWorker(this, "Cannot create HAP runtime: ${e.message}", e)
         } catch (e: Exception) {
-            Log.e(TAG, "ERROR: Activity onCreate failed", e)
-            disableEdgeToEdgeNextLaunch(e)
+            RuntimeErrorActivity.abortWorker(this, "Cannot create HAP activity: ${e.message}", e)
         }
 
         Log.e(TAG, "========== HoaAbilityActivity onCreate END ==========")
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
+            val callback = android.window.OnBackInvokedCallback { handleArkBack() }
+            onBackInvokedDispatcher.registerOnBackInvokedCallback(
+                android.window.OnBackInvokedDispatcher.PRIORITY_DEFAULT, callback)
+            unregisterBackCallback = { onBackInvokedDispatcher.unregisterOnBackInvokedCallback(callback) }
+        }
     }
 
     override fun onPostCreate(savedInstanceState: Bundle?) {
@@ -225,9 +211,12 @@ open class HoaAbilityActivity : StageActivity() {
             }
             val matched = abilities.firstOrNull { it.name == ability } ?: continue
 
-            val slot = ProcessSlotManager.launchHap(
-                applicationContext, myBundle, moduleName, ability, params
-            )
+            val slot = try {
+                ProcessSlotManager.launchHap(applicationContext, myBundle, moduleName, ability, params)
+            } catch (e: Exception) {
+                Log.e(TAG, "routeAbilityToSlot: launch failed for $myBundle/$ability", e)
+                return false
+            }
             if (slot < 0) {
                 Log.e(TAG, "routeAbilityToSlot: no free slot for $myBundle/$ability")
                 return false
@@ -301,6 +290,13 @@ open class HoaAbilityActivity : StageActivity() {
     //   lifecycle transition on MIUI.
     // ================================================================
     override fun setRequestedOrientation(requestedOrientation: Int) {
+        val host = com.kira.harmoid.device.DeviceProfile.system()
+        val affectedHost = host.manufacturer.equals("Xiaomi", ignoreCase = true) ||
+            listOf("xiaomi", "redmi", "poco").any { host.brand.equals(it, ignoreCase = true) }
+        if (!affectedHost) {
+            super.setRequestedOrientation(requestedOrientation)
+            return
+        }
         val config = resources.configuration
         val currentOrientation = config.orientation
         val targetOrientation = when (requestedOrientation) {
@@ -350,12 +346,12 @@ open class HoaAbilityActivity : StageActivity() {
     //       setRequestedOrientation workaround is also required.
     // ================================================================
     override fun onDestroy() {
+        unregisterBackCallback?.invoke()
+        unregisterBackCallback = null
         Log.e(TAG, "onDestroy — UIAbility.onDestroy() should fire, isChangingConfigurations=$isChangingConfigurations")
-        val slot = intent.getIntExtra("PROCESS_SLOT", -1)
-        if (slot >= 0) {
-            ProcessSlotManager.releaseSlot(this, slot)
-            Log.e(TAG, "Process slot $slot released")
-        }
+        // Keep the PID record until this process actually exits. Releasing it
+        // before killProcess lets another launch reuse a still-running runtime;
+        // configuration changes must retain the same reservation as well.
         HarmoidMediaBridge.release()
         HapSession.detach()
         super.onDestroy()
@@ -468,10 +464,16 @@ open class HoaAbilityActivity : StageActivity() {
         androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(content) { _, insets -> insets }
     }
 
+    // StageActivity is a platform Activity. API 33+ uses the callback above;
+    // older devices still enter this legacy method.
+    @android.annotation.SuppressLint("GestureBackNavigation")
     override fun onBackPressed() {
         Log.e(TAG, "onBackPressed")
-        super.onBackPressed()
+        handleArkBack()
     }
+
+    @android.annotation.SuppressLint("GestureBackNavigation")
+    private fun handleArkBack() = super.onBackPressed()
 
     // ============================================================
     // Apply the HAP's app name and icon to the Android Activity,

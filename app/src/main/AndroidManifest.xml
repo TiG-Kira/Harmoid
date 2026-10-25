@@ -16,10 +16,11 @@
     <uses-permission android:name="android.permission.ACCESS_BACKGROUND_LOCATION" />
 
     <!-- Storage -->
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"
+        android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <!-- Granular media (Android 13+) -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.READ_MEDIA_VIDEO" />
@@ -48,6 +49,7 @@
     <uses-permission android:name="android.permission.BLUETOOTH" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
 
     <!-- Sensors -->
@@ -75,6 +77,17 @@
          因此这里放行合并检查是安全的。 -->
     <uses-sdk tools:overrideLibrary="top.yukonga.miuix.kmp.blur" />
 
+    <!-- Hardware is optional: individual HAPs select the capabilities they use. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.camera.autofocus" android:required="false" />
+    <uses-feature android:name="android.hardware.telephony" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+    <uses-feature android:name="android.hardware.bluetooth_le" android:required="false" />
+    <uses-feature android:name="android.hardware.nfc" android:required="false" />
+
     <application
         android:name=".HoaApplication"
         android:allowBackup="true"
@@ -87,26 +100,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Harmoid"
         android:extractNativeLibs="true"
+        android:pageSizeCompat="enabled"
         android:usesCleartextTraffic="true"
         tools:targetApi="31">
 
-        <!--
-          禁用 profileinstaller 的启动初始化。
-          原因（26.10.19.2 实测）：debug 变体上 ProfileInstaller 后台写 profile 时
-          NoClassDefFoundError: androidx.concurrent.futures.AbstractResolvableFuture
-          （类定义在 classes13.dex 里但 ART 加载不到，14 个 dex 的合并边界问题；
-          release 变体无 baseline profile 会直接跳过所以没暴露）。
-          未捕获异常把整个进程杀光 → 开 app 闪退。基线 profile 对功能零意义，直接禁。
-        -->
-        <provider
-            android:name="androidx.startup.InitializationProvider"
-            android:authorities="${applicationId}.androidx-startup"
-            android:exported="false"
-            tools:node="merge">
-            <meta-data
-                android:name="androidx.profileinstaller.ProfileInstallerInitializer"
-                tools:node="remove" />
-        </provider>
+        <!-- 当前依赖不包含 AndroidX Startup，不能声明其 InitializationProvider。 -->
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -131,6 +129,7 @@
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <data android:scheme="file" />
+                <data android:host="*" />
                 <data android:mimeType="*/*" />
                 <data android:pathPattern=".*\\.hap" />
             </intent-filter>
@@ -157,6 +156,12 @@
                 <data android:mimeType="application/zip" />
             </intent-filter>
         </activity>
+
+        <activity
+            android:name=".RuntimeErrorActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/Theme.Harmoid.About" />
 
         <activity
             android:name=".DevTestActivity"
@@ -188,87 +193,91 @@
         <activity
             android:name=".HoaAbilityActivity0"
             android:process=":hap0"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity1"
             android:process=":hap1"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity2"
             android:process=":hap2"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity3"
             android:process=":hap3"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity4"
             android:process=":hap4"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity5"
             android:process=":hap5"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity6"
             android:process=":hap6"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity7"
             android:process=":hap7"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity8"
             android:process=":hap8"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <activity
             android:name=".HoaAbilityActivity9"
             android:process=":hap9"
-            android:exported="true"
+            android:exported="false"
             android:launchMode="singleTop"
-            android:configChanges="orientation|keyboard|layoutDirection|screenSize|uiMode|smallestScreenSize|density"
+            android:configChanges="orientation|keyboard|keyboardHidden|layoutDirection|screenSize|screenLayout|uiMode|smallestScreenSize|density|fontScale|fontWeightAdjustment|locale|colorMode"
             android:windowSoftInputMode="adjustResize|stateHidden" />
 
         <service
             android:name=".hdc.HdcService"
-            android:exported="true"
-            android:foregroundServiceType="specialUse" />
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="HDC development connection for installing and debugging HAP applications" />
+        </service>
 
     </application>
 

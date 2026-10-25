@@ -34,7 +34,6 @@ import android.provider.MediaStore.MediaColumns;
 import android.webkit.MimeTypeMap;
 
 import java.io.File;
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
@@ -44,7 +43,6 @@ import java.util.Arrays;
 import java.util.Date;
 import java.util.List;
 import java.util.Locale;
-import java.util.Map;
 import java.util.Random;
 
 import ohos.ace.adapter.ALog;
@@ -348,18 +346,16 @@ public class PhotoPlugin {
             return EMPTY_STR;
         }
         String[] columns = {MediaStore.MediaColumns.DATA};
-        Cursor cursor = mResolver.query(uri, columns, null, null, null);
-        if (cursor == null) {
+        try (Cursor cursor = mResolver.query(uri, columns, null, null, null)) {
+            if (cursor == null || !cursor.moveToFirst()) return EMPTY_STR;
+            int index = cursor.getColumnIndex(MediaStore.Images.Media.DATA);
+            if (index < 0) return EMPTY_STR;
+            String relativePath = cursor.getString(index);
+            return relativePath == null || relativePath.isEmpty() ? EMPTY_STR : IMAGE_PREFIX + relativePath;
+        } catch (SecurityException | IllegalArgumentException e) {
+            ALog.e(TAG, "Cannot resolve selected photo: " + e.getMessage());
             return EMPTY_STR;
         }
-        cursor.moveToFirst();
-        int index = cursor.getColumnIndex(MediaStore.Images.Media.DATA);
-        String relativePath = cursor.getString(index);
-        if (relativePath == null || relativePath.isEmpty()) {
-            return EMPTY_STR;
-        }
-        String imagePath = IMAGE_PREFIX + relativePath;
-        return imagePath;
     }
 
     private boolean checkResult(int requestCode, int resultCode, Intent data) {
@@ -386,35 +382,7 @@ public class PhotoPlugin {
     }
 
     private Activity getActivity() {
-        try {
-            Class activityThreadClass = Class.forName("android.app.ActivityThread");
-            Object activityThread = activityThreadClass.getMethod("currentActivityThread").invoke(null);
-            Field mActivities = activityThreadClass.getDeclaredField("mActivities");
-            mActivities.setAccessible(true);
-            Map activitiesMap = (Map) mActivities.get(activityThread);
-            for (Object activityClientRecord : activitiesMap.values()) {
-                Class activityClientRecordClass = activityClientRecord.getClass();
-                Field paused = activityClientRecordClass.getDeclaredField("paused");
-                paused.setAccessible(true);
-                if (!paused.getBoolean(activityClientRecord)) {
-                    Field activityField = activityClientRecordClass.getDeclaredField("activity");
-                    activityField.setAccessible(true);
-                    Activity activity = (Activity) activityField.get(activityClientRecord);
-                    return activity;
-                }
-            }
-        } catch (ClassNotFoundException e) {
-            e.printStackTrace();
-        } catch (InvocationTargetException e) {
-            e.printStackTrace();
-        } catch (NoSuchMethodException e) {
-            e.printStackTrace();
-        } catch (NoSuchFieldException e) {
-            e.printStackTrace();
-        } catch (IllegalAccessException e) {
-            e.printStackTrace();
-        }
-        return null;
+        return com.kira.harmoid.bridge.ActivityTracker.getActivity(mContext);
     }
 
     /**

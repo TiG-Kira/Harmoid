@@ -4,294 +4,242 @@
 #include <elf.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-// elf_patch_libc_to_libb(path)
-//
-// In-place replacement: "libc.so\0" → "libb.so\0" in the ELF .dynstr
-// section.  Both strings are exactly 8 bytes, so this is a single
-// memcpy — no section growth, no .dynamic shifting.
-//
-// Returns 0 on success, -1 if the file does not have a DT_NEEDED for
-// "libc.so", or on ELF parse errors.
+// All offsets come from HAP-controlled ELF data. Validate ranges using
+// subtraction, so overflowing offsets cannot pass an addition-based check.
+typedef struct {
+    void *map;
+    size_t size;
+    Elf64_Dyn *dynamic;
+    size_t dynamic_count;
+    char *strings;
+    size_t strings_size;
+} ElfFileView;
 
-int elf_patch_libc_to_libb(const char *path)
+static int file_range(size_t size, Elf64_Off offset, Elf64_Xword length)
 {
-    int fd = open(path, O_RDWR);
+    return offset <= size && length <= size - offset;
+}
+
+static int elf_file_open(const char *path, int writable, ElfFileView *view)
+{
+    memset(view, 0, sizeof(*view));
+    int fd = open(path, writable ? O_RDWR : O_RDONLY);
     if (fd < 0) return -1;
-
     struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return -1; }
-
-    void *map = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE,
-                     MAP_SHARED, fd, 0);
+    if (fstat(fd, &st) < 0 || st.st_size < (off_t)sizeof(Elf64_Ehdr) ||
+        (uintmax_t)st.st_size > SIZE_MAX) {
+        close(fd);
+        return -1;
+    }
+    view->size = (size_t)st.st_size;
+    view->map = mmap(NULL, view->size, PROT_READ | (writable ? PROT_WRITE : 0),
+                     writable ? MAP_SHARED : MAP_PRIVATE, fd, 0);
     close(fd);
-    if (map == MAP_FAILED) return -1;
+    if (view->map == MAP_FAILED) return -1;
 
-    // Validate ELF header
-    if (st.st_size < (off_t)sizeof(Elf64_Ehdr)) goto fail;
-    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)map;
-    if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) goto fail;
-    if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) goto fail;
+    Elf64_Ehdr *header = view->map;
+    if (memcmp(header->e_ident, ELFMAG, SELFMAG) != 0 ||
+        header->e_ident[EI_CLASS] != ELFCLASS64 ||
+        header->e_ident[EI_DATA] != ELFDATA2LSB ||
+        header->e_ident[EI_VERSION] != EV_CURRENT ||
+        header->e_phentsize != sizeof(Elf64_Phdr) || header->e_phnum == 0 ||
+        header->e_phoff % _Alignof(Elf64_Phdr) != 0 ||
+        !file_range(view->size, header->e_phoff,
+                    (Elf64_Xword)header->e_phnum * sizeof(Elf64_Phdr))) goto fail;
 
-    // Find PT_DYNAMIC
-    Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)map + ehdr->e_phoff);
-    Elf64_Addr dyn_addr = 0;
-    Elf64_Off dyn_offset = 0;
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_DYNAMIC) {
-            dyn_addr = phdr[i].p_vaddr;
-            dyn_offset = phdr[i].p_offset;
+    Elf64_Phdr *segments = (Elf64_Phdr *)((char *)view->map + header->e_phoff);
+    for (size_t i = 0; i < header->e_phnum; ++i) {
+        Elf64_Phdr *segment = &segments[i];
+        if (segment->p_type != PT_DYNAMIC) continue;
+        if (!file_range(view->size, segment->p_offset, segment->p_filesz) ||
+            segment->p_offset % _Alignof(Elf64_Dyn) != 0 ||
+            segment->p_filesz % sizeof(Elf64_Dyn) != 0) goto fail;
+        view->dynamic = (Elf64_Dyn *)((char *)view->map + segment->p_offset);
+        view->dynamic_count = segment->p_filesz / sizeof(Elf64_Dyn);
+        break;
+    }
+    if (view->dynamic == NULL) goto fail;
+
+    Elf64_Addr string_address = 0;
+    Elf64_Xword string_size = 0;
+    int have_strings = 0, terminated = 0;
+    for (size_t i = 0; i < view->dynamic_count; ++i) {
+        Elf64_Dyn *entry = &view->dynamic[i];
+        if (entry->d_tag == DT_NULL) {
+            view->dynamic_count = i;
+            terminated = 1;
             break;
         }
-    }
-    if (dyn_addr == 0) goto fail;
-
-    // Walk .dynamic to find DT_STRTAB
-    Elf64_Dyn *dyn = (Elf64_Dyn *)((char *)map + dyn_offset);
-    const char *dynstr = NULL;
-    for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
-        if (d->d_tag == DT_STRTAB) {
-            // d_un.d_ptr is a virtual address; convert to file offset.
-            // For .dynstr this is typically in the first PT_LOAD segment,
-            // so vaddr → file offset is: file = vaddr - p_vaddr + p_offset.
-            int found = 0;
-            for (int i = 0; i < ehdr->e_phnum; i++) {
-                if (phdr[i].p_type == PT_LOAD &&
-                    d->d_un.d_val >= phdr[i].p_vaddr &&
-                    d->d_un.d_val < phdr[i].p_vaddr + phdr[i].p_filesz) {
-                    dynstr = (const char *)map + phdr[i].p_offset
-                             + (d->d_un.d_val - phdr[i].p_vaddr);
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found) goto fail;
-            break;
+        if (entry->d_tag == DT_STRTAB) {
+            string_address = entry->d_un.d_ptr;
+            have_strings = 1;
         }
+        if (entry->d_tag == DT_STRSZ) string_size = entry->d_un.d_val;
     }
-    if (dynstr == NULL) goto fail;
+    if (!terminated || !have_strings || string_size == 0) goto fail;
 
-    // Check if "libb.so" already present (already patched)
-    int already_patched = 0;
-    for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
-        if (d->d_tag == DT_NEEDED &&
-            strcmp(dynstr + d->d_un.d_val, "libb.so") == 0) {
-            already_patched = 1;
-            break;
-        }
+    for (size_t i = 0; i < header->e_phnum; ++i) {
+        Elf64_Phdr *segment = &segments[i];
+        if (segment->p_type != PT_LOAD || string_address < segment->p_vaddr) continue;
+        Elf64_Addr relative = string_address - segment->p_vaddr;
+        if (relative >= segment->p_filesz || string_size > segment->p_filesz - relative ||
+            !file_range(view->size, segment->p_offset, segment->p_filesz)) continue;
+        view->strings = (char *)view->map + segment->p_offset + relative;
+        view->strings_size = string_size;
+        break;
     }
-    if (already_patched) { munmap(map, st.st_size); return 0; }
-
-    // Find DT_NEEDED for "libc.so" and replace in-place
-    int patched = 0;
-    for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
-        if (d->d_tag == DT_NEEDED &&
-            strcmp(dynstr + d->d_un.d_val, "libc.so") == 0) {
-            memcpy((char *)dynstr + d->d_un.d_val, "libb.so", 8);
-            patched = 1;
-            break;
-        }
+    if (view->strings == NULL) goto fail;
+    // In-place edits must not mutate entries that subsequent iterations read.
+    char *dynamic_start = (char *)view->dynamic;
+    char *dynamic_end = dynamic_start + (view->dynamic_count + 1) * sizeof(Elf64_Dyn);
+    if (view->strings < dynamic_end && view->strings + view->strings_size > dynamic_start) goto fail;
+    // Validate every referenced string before any patch is written.
+    for (size_t i = 0; i < view->dynamic_count; ++i) {
+        Elf64_Dyn *entry = &view->dynamic[i];
+        if (entry->d_tag != DT_NEEDED && entry->d_tag != DT_RUNPATH &&
+            entry->d_tag != DT_RPATH) continue;
+        Elf64_Xword offset = entry->d_un.d_val;
+        if (offset >= view->strings_size ||
+            memchr(view->strings + offset, '\0', view->strings_size - offset) == NULL) goto fail;
     }
-
-    munmap(map, st.st_size);
-    return patched ? 0 : -1;
+    return 0;
 
 fail:
-    munmap(map, st.st_size);
+    munmap(view->map, view->size);
     return -1;
 }
 
-// elf_patch_runpath_to_origin(path)
-//
-// Overwrite DT_RUNPATH (and DT_RPATH if present) with "$ORIGIN" so that
-// the linker resolves DT_NEEDED dependencies from the same directory as
-// the loading .so, rather than the OHOS build-machine path baked in by
-// the HarmonyOS toolchain.
-//
-// "$ORIGIN" is 8 bytes (including NUL).  The existing RUNPATH string is
-// always longer (typically a build-machine absolute path), so we can
-// overwrite in place without growing any section.
-//
-// Returns 0 on success (or if no RUNPATH/RPATH present), -1 on error.
+// Returns 0 when libc.so was patched or libb.so was already referenced.
+int elf_patch_libc_to_libb(const char *path)
+{
+    ElfFileView view;
+    if (elf_file_open(path, 1, &view) != 0) return -1;
+    int result = -1;
+    for (size_t i = 0; i < view.dynamic_count; ++i) {
+        Elf64_Dyn *entry = &view.dynamic[i];
+        if (entry->d_tag != DT_NEEDED) continue;
+        char *name = view.strings + entry->d_un.d_val;
+        if (strcmp(name, "libc.so") == 0) {
+            memcpy(name, "libb.so", sizeof("libb.so"));
+            result = 0;
+        } else if (strcmp(name, "libb.so") == 0) result = 0;
+    }
+    munmap(view.map, view.size);
+    return result;
+}
 
+// Only replace paths with enough space, including the NUL terminator.
+// Returns -1 when no replaceable RUNPATH/RPATH exists.
 int elf_patch_runpath_to_origin(const char *path)
 {
-    int fd = open(path, O_RDWR);
-    if (fd < 0) return -1;
-
-    struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return -1; }
-
-    void *map = mmap(NULL, st.st_size, PROT_READ | PROT_WRITE,
-                     MAP_SHARED, fd, 0);
-    close(fd);
-    if (map == MAP_FAILED) return -1;
-
-    if (st.st_size < (off_t)sizeof(Elf64_Ehdr)) goto fail2;
-    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)map;
-    if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) goto fail2;
-    if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) goto fail2;
-
-    Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)map + ehdr->e_phoff);
-    Elf64_Off dyn_offset = 0;
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_DYNAMIC) {
-            dyn_offset = phdr[i].p_offset;
-            break;
+    ElfFileView view;
+    if (elf_file_open(path, 1, &view) != 0) return -1;
+    for (size_t i = 0; i < view.dynamic_count; ++i) {
+        Elf64_Dyn *entry = &view.dynamic[i];
+        if ((entry->d_tag == DT_RUNPATH || entry->d_tag == DT_RPATH) &&
+            strlen(view.strings + entry->d_un.d_val) < sizeof("$ORIGIN") - 1) {
+            munmap(view.map, view.size);
+            return -1;
         }
     }
-    if (dyn_offset == 0) goto fail2;
-
-    Elf64_Dyn *dyn = (Elf64_Dyn *)((char *)map + dyn_offset);
-
-    // Find .dynstr
-    const char *dynstr = NULL;
-    for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
-        if (d->d_tag == DT_STRTAB) {
-            int found = 0;
-            for (int i = 0; i < ehdr->e_phnum; i++) {
-                if (phdr[i].p_type == PT_LOAD &&
-                    d->d_un.d_val >= phdr[i].p_vaddr &&
-                    d->d_un.d_val < phdr[i].p_vaddr + phdr[i].p_filesz) {
-                    dynstr = (const char *)map + phdr[i].p_offset
-                             + (d->d_un.d_val - phdr[i].p_vaddr);
-                    found = 1;
-                    break;
-                }
-            }
-            if (!found) goto fail2;
-            break;
+    int result = -1;
+    for (size_t i = 0; i < view.dynamic_count; ++i) {
+        Elf64_Dyn *entry = &view.dynamic[i];
+        if (entry->d_tag == DT_RUNPATH || entry->d_tag == DT_RPATH) {
+            memcpy(view.strings + entry->d_un.d_val, "$ORIGIN", sizeof("$ORIGIN"));
+            result = 0;
         }
     }
-    if (dynstr == NULL) goto fail2;
-
-    int patched = 0;
-
-    for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
-        if (d->d_tag == DT_RUNPATH) {
-            memcpy((char *)dynstr + d->d_un.d_val, "$ORIGIN", 8);
-            patched = 1;
-        }
-        // Also clear DT_RPATH if present, so RUNPATH takes effect
-        // even when the executable has an RPATH.
-        if (d->d_tag == DT_RPATH) {
-            memcpy((char *)dynstr + d->d_un.d_val, "$ORIGIN", 8);
-            patched = 1;
-        }
-    }
-
-    munmap(map, st.st_size);
-    return patched ? 0 : -1;
-
-fail2:
-    munmap(map, st.st_size);
-    return -1;
+    munmap(view.map, view.size);
+    return result;
 }
 
 #define MAX_NEEDED 32
 #define MAX_SONAME 256
 
-// Read DT_NEEDED sonames from an ELF shared library.
-// needed: array of at least max elements, each char[MAX_SONAME].
-// Returns number of DT_NEEDED entries, or -1 on error.
 int elf_read_needed(const char *path, char (*needed)[MAX_SONAME], int max)
 {
-    int fd = open(path, O_RDONLY);
-    if (fd < 0) return -1;
-
-    struct stat st;
-    if (fstat(fd, &st) < 0) { close(fd); return -1; }
-
-    void *map = mmap(NULL, st.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
-    close(fd);
-    if (map == MAP_FAILED) return -1;
-
-    if (st.st_size < (off_t)sizeof(Elf64_Ehdr)) { munmap(map, st.st_size); return -1; }
-    Elf64_Ehdr *ehdr = (Elf64_Ehdr *)map;
-    if (memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) { munmap(map, st.st_size); return -1; }
-    if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) { munmap(map, st.st_size); return -1; }
-
-    Elf64_Phdr *phdr = (Elf64_Phdr *)((char *)map + ehdr->e_phoff);
-    Elf64_Off dyn_offset = 0;
-    for (int i = 0; i < ehdr->e_phnum; i++) {
-        if (phdr[i].p_type == PT_DYNAMIC) {
-            dyn_offset = phdr[i].p_offset;
-            break;
-        }
-    }
-    if (dyn_offset == 0) { munmap(map, st.st_size); return -1; }
-
-    Elf64_Dyn *dyn = (Elf64_Dyn *)((char *)map + dyn_offset);
-
-    const char *dynstr = NULL;
-    for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL; d++) {
-        if (d->d_tag == DT_STRTAB) {
-            for (int i = 0; i < ehdr->e_phnum; i++) {
-                if (phdr[i].p_type == PT_LOAD &&
-                    d->d_un.d_val >= phdr[i].p_vaddr &&
-                    d->d_un.d_val < phdr[i].p_vaddr + phdr[i].p_filesz) {
-                    dynstr = (const char *)map + phdr[i].p_offset
-                             + (d->d_un.d_val - phdr[i].p_vaddr);
-                    break;
-                }
-            }
-            break;
-        }
-    }
-
+    if (needed == NULL || max < 0) return -1;
+    ElfFileView view;
+    if (elf_file_open(path, 0, &view) != 0) return -1;
     int count = 0;
-    if (dynstr != NULL) {
-        for (Elf64_Dyn *d = dyn; d->d_tag != DT_NULL && count < max; d++) {
-            if (d->d_tag == DT_NEEDED) {
-                strncpy(needed[count], dynstr + d->d_un.d_val, MAX_SONAME - 1);
-                needed[count][MAX_SONAME - 1] = '\0';
-                count++;
-            }
+    for (size_t i = 0; i < view.dynamic_count && count < max; ++i) {
+        Elf64_Dyn *entry = &view.dynamic[i];
+        if (entry->d_tag != DT_NEEDED) continue;
+        const char *name = view.strings + entry->d_un.d_val;
+        if (strlen(name) >= MAX_SONAME) {
+            munmap(view.map, view.size);
+            return -1;
         }
+        strcpy(needed[count++], name);
     }
-
-    munmap(map, st.st_size);
+    munmap(view.map, view.size);
     return count;
 }
 
 // Load a shared library, recursively loading its DT_NEEDED dependencies
-// found in the same directory first.  Uses RTLD_NOLOAD to skip already-
-// loaded libraries and avoid infinite recursion on circular deps.
+// found in the same directory first. RTLD_NOLOAD skips loaded libraries;
+// a separate ancestor chain detects dependencies that are still being visited.
 // Returns 0 on success, -1 on failure.
-int elf_load_with_deps(const char *path)
+typedef struct LoadFrame {
+    const char *path;
+    const struct LoadFrame *parent;
+} LoadFrame;
+
+static int elf_load_with_deps_inner(const char *path, const LoadFrame *parent, size_t depth)
 {
+    if (path == NULL || depth >= 128) return -1;
+    for (const LoadFrame *frame = parent; frame != NULL; frame = frame->parent) {
+        if (strcmp(frame->path, path) == 0) {
+            __android_log_print(ANDROID_LOG_WARN, "BRIDGE-LOAD", "Circular dependency: %s", path);
+            return -1;
+        }
+    }
+    const LoadFrame current = { path, parent };
     void *check = dlopen(path, RTLD_NOW | RTLD_NOLOAD);
     if (check != NULL) {
         dlclose(check);
         return 0;
     }
 
-    char needed[MAX_NEEDED][MAX_SONAME];
-    int n = elf_read_needed(path, needed, MAX_NEEDED);
+    // Keep per-node scratch buffers off the thread stack. Native callers may
+    // use small Android pthread stacks even when the dependency graph is deep.
+    struct LoadBuffers {
+        char needed[MAX_NEEDED][MAX_SONAME];
+        char directory[4096];
+        char dependency[4096];
+    } *buffers = malloc(sizeof(*buffers));
+    if (buffers == NULL) return -1;
+    int result = -1;
+    int count = elf_read_needed(path, buffers->needed, MAX_NEEDED);
+    if (count < 0) goto done;
 
-    char dir[4096];
     const char *slash = strrchr(path, '/');
-    if (slash) {
-        size_t len = slash - path;
-        memcpy(dir, path, len);
-        dir[len] = '\0';
+    if (slash != NULL) {
+        size_t length = slash - path;
+        if (length >= sizeof(buffers->directory)) goto done;
+        memcpy(buffers->directory, path, length);
+        buffers->directory[length] = '\0';
     } else {
-        dir[0] = '.';
-        dir[1] = '\0';
+        strcpy(buffers->directory, ".");
     }
-
-    if (n > 0) {
-        for (int i = 0; i < n; i++) {
-            char dep_path[4096];
-            snprintf(dep_path, sizeof(dep_path), "%s/%s", dir, needed[i]);
-            if (access(dep_path, F_OK) == 0) {
-                elf_load_with_deps(dep_path);
-            }
+    for (int i = 0; i < count; ++i) {
+        // Preload siblings only; path-like entries remain the linker's job.
+        if (strchr(buffers->needed[i], '/') != NULL) continue;
+        int length = snprintf(buffers->dependency, sizeof(buffers->dependency),
+                              "%s/%s", buffers->directory, buffers->needed[i]);
+        if (length < 0 || (size_t)length >= sizeof(buffers->dependency)) goto done;
+        if (access(buffers->dependency, F_OK) == 0) {
+            // A cycle can still be handled by dlopen when a valid RUNPATH is
+            // present. Stop our traversal, then let the linker try normally.
+            elf_load_with_deps_inner(buffers->dependency, &current, depth + 1);
         }
     }
 
@@ -299,9 +247,16 @@ int elf_load_with_deps(const char *path)
     if (handle == NULL) {
         __android_log_print(ANDROID_LOG_WARN, "BRIDGE-LOAD",
                             "dlopen(%s): %s", path, dlerror());
-        return -1;
+    } else {
+        __android_log_print(ANDROID_LOG_INFO, "BRIDGE-LOAD", "dlopen(%s) OK", path);
+        result = 0; // Retain the handle for the process-global ArkUI runtime.
     }
-    __android_log_print(ANDROID_LOG_INFO, "BRIDGE-LOAD",
-                        "dlopen(%s) OK", path);
-    return 0;
+done:
+    free(buffers);
+    return result;
+}
+
+int elf_load_with_deps(const char *path)
+{
+    return elf_load_with_deps_inner(path, NULL, 0);
 }

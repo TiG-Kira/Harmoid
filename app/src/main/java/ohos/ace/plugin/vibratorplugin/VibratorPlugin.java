@@ -25,7 +25,6 @@ import android.os.Build;
 import android.os.VibrationEffect;
 import android.os.Vibrator;
 
-import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
@@ -638,43 +637,7 @@ public class VibratorPlugin {
     }
 
     private Activity getActivity() {
-        try {
-            Class activityThreadClass = Class.forName("android.app.ActivityThread");
-            Object activityThread = activityThreadClass.getMethod("currentActivityThread").invoke(null);
-            Field mActivities = activityThreadClass.getDeclaredField("mActivities");
-            mActivities.setAccessible(true);
-            Object fieldValue = mActivities.get(activityThread);
-            if (fieldValue == null || !(fieldValue instanceof Map)) {
-                return null;
-            }
-            Map activitiesMap = (Map) fieldValue;
-            for (Object activityClientRecord : activitiesMap.values()) {
-                Class activityClientRecordClass = activityClientRecord.getClass();
-                Field paused = activityClientRecordClass.getDeclaredField("paused");
-                paused.setAccessible(true);
-                if (paused.getBoolean(activityClientRecord)) {
-                    return null;
-                }
-                Field activityField = activityClientRecordClass.getDeclaredField("activity");
-                activityField.setAccessible(true);
-                Object activityFieldValue = activityField.get(activityClientRecord);
-                if (activityFieldValue != null && activityFieldValue instanceof Activity) {
-                    return (Activity) activityFieldValue;
-                }
-                return null;
-            }
-        } catch (ClassNotFoundException ex) {
-            ALog.e(LOG_TAG, "getActivity failed: " + ex.getMessage());
-        } catch (InvocationTargetException ex) {
-            ALog.e(LOG_TAG, "getActivity failed: " + ex.getMessage());
-        } catch (NoSuchMethodException ex) {
-            ALog.e(LOG_TAG, "getActivity failed: " + ex.getMessage());
-        } catch (NoSuchFieldException ex) {
-            ALog.e(LOG_TAG, "getActivity failed: " + ex.getMessage());
-        } catch (IllegalAccessException ex) {
-            ALog.e(LOG_TAG, "getActivity failed: " + ex.getMessage());
-        }
-        return null;
+        return com.kira.harmoid.bridge.ActivityTracker.getActivity(mContext);
     }
 
     /**

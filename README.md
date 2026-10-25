@@ -176,6 +176,7 @@ gh release upload <tag> arkui-x-prebuilts-arm64.zip
 ## 相关文档
 
 - `docs/BUILD.md` — 完整构建文档
+- `docs/RELIABILITY_REVIEW.md` — 安装、槽位、资源索引与 ELF 加载修复及回归验证
 - `docs/ARKUI-X_PATCHES.md` — ArkUI-X 源码修改说明
 - `scripts/build_adapter_jar.sh` — 从 ArkUI-X 源码编出 `arkui_android_adapter.jar`
 - `scripts/pack_prebuilts.sh` — 生成 CI 用的 `arkui-x-prebuilts-arm64.zip`

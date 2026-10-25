@@ -1,6 +1,8 @@
 package com.kira.harmoid.hap
 
 import android.content.Context
+import com.kira.harmoid.ProcessSlotManager
+import com.kira.harmoid.ProcessSlotStore
 import com.kira.harmoid.logging.LogWriter
 import org.json.JSONObject
 import java.io.File
@@ -15,20 +17,48 @@ data class InstalledHap(
     val mainAbility: String
 )
 
-class HapInstaller(private val context: Context) {
+class HapInstaller internal constructor(
+    filesDir: File,
+    private val cacheDir: File,
+    private val patchLibrary: (File) -> Unit
+) {
+    constructor(context: Context) : this(context.filesDir, context.cacheDir, { soFile ->
+        try {
+            if (!ElfPatcher.patchSo(soFile.absolutePath)) {
+                LogWriter.w(TAG, "ELF patch skipped or failed: ${soFile.name}")
+            }
+        } catch (e: UnsatisfiedLinkError) {
+            LogWriter.w(TAG, "ELF patch JNI not available, skipping: ${soFile.name}", e)
+        }
+    })
 
     // Install to filesDir/hap/ so the ArkUI-X runtime's
     // StageAssetProvider.GetAppDataModuleDir() can discover them.
-    private val baseDir = File(context.filesDir, "hap")
-    private val sysDir = File(context.filesDir, "sys")
+    private val storage = HapInstallStorage(filesDir)
+    private val baseDir = storage.baseDir
+    private val sysDir = File(filesDir, "sys")
+    private val slots = ProcessSlotStore(File(filesDir, "process_slots"), ProcessSlotManager.MAX_SLOTS)
 
     fun install(hapPath: String): InstalledHap {
-        val bundle = HapBundleLoader().parse(hapPath)
-        return installFromBundle(bundle)
+        val loader = HapBundleLoader()
+        var unwrapped: File? = null
+        try {
+            val bundle = try {
+                loader.parse(hapPath)
+            } catch (e: HapParseException) {
+                if (!loader.isAppPackage(hapPath)) throw e
+                val hap = File(loader.unwrapSingleHap(hapPath))
+                unwrapped = hap
+                loader.parse(hap.path)
+            }
+            return HapFileLock.withLock(baseDir) { installFromBundle(bundle) }
+        } finally {
+            unwrapped?.delete()
+        }
     }
 
     fun install(inputStream: InputStream): InstalledHap {
-        val tmpFile = File(context.cacheDir, "hap_tmp_${System.currentTimeMillis()}")
+        val tmpFile = File.createTempFile("hap_install_", ".hap", cacheDir)
         try {
             tmpFile.outputStream().use { out -> inputStream.copyTo(out) }
             return install(tmpFile.absolutePath)
@@ -38,97 +68,80 @@ class HapInstaller(private val context: Context) {
     }
 
     private fun installFromBundle(bundle: HapBundle): InstalledHap {
-        val bundleName = bundle.moduleConfig.bundleName.ifBlank { "unknown" }
+        val bundleName = bundle.moduleConfig.bundleName
         val moduleName = bundle.moduleConfig.name
+        HapPaths.validateNames(bundleName, moduleName)
+        ensureStopped(bundleName)
         // Runtime expects dot-separated: bundleName.moduleName
         val fullModuleName = "$bundleName.$moduleName"
-        val targetDir = File(baseDir, fullModuleName)
+        val installedDir = storage.replace(fullModuleName) { targetDir ->
 
-        if (targetDir.exists()) {
-            targetDir.deleteRecursively()
-        }
-        // Also clean the Preload copy under files/sys/ so the runtime re-copies
-        // fresh resources on next launch. Otherwise stale resources.index from
-        // a previous installation with the same bundleName would be used.
-        val sysTargetDir = File(sysDir, fullModuleName)
-        if (sysTargetDir.exists()) {
-            sysTargetDir.deleteRecursively()
-        }
-        targetDir.mkdirs()
+            // Write module.json
+            File(targetDir, "module.json").writeText(bundle.moduleConfig.rawJson)
 
-        // Write module.json
-        File(targetDir, "module.json").writeText(bundle.moduleConfig.rawJson)
-
-        // Stream files directly from ZIP to disk to avoid OOM on large HAPs.
-        ZipFile(bundle.hapFile).use { zip ->
-            // .abc bytecode
-            for (path in listOf("ets/modules.abc", "ets/modules_static.abc")) {
-                zip.getEntry(path)?.let { entry ->
-                    val file = File(targetDir, path)
-                    file.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { input ->
-                        file.outputStream().use { out -> input.copyTo(out) }
-                    }
-                }
-            }
-
-            // resources.index
-            zip.getEntry("resources.index")?.let { entry ->
-                val file = File(targetDir, "resources.index")
-                zip.getInputStream(entry).use { input ->
-                    file.outputStream().use { out -> input.copyTo(out) }
-                }
-            }
-
-            // Resource files under resources/
-            val entries = zip.entries()
-            while (entries.hasMoreElements()) {
-                val entry = entries.nextElement()
-                val name = entry.name
-                if ((name.startsWith("resources/") || (name.startsWith("libs/") && name.endsWith(".so")))
-                    && !entry.isDirectory) {
-                    val file = File(targetDir, name)
-                    file.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { input ->
-                        file.outputStream().use { out -> input.copyTo(out) }
-                    }
-                }
-            }
-        }
-
-        // Extract pkgContextInfo.json from HAP (contains all npm dependency info)
-        var pkgContextJson: String? = null
-        ZipFile(bundle.hapFile).use { zip ->
-            zip.getEntry("pkgContextInfo.json")?.let { entry ->
-                zip.getInputStream(entry).use { input ->
-                    pkgContextJson = input.reader().readText()
-                }
-            }
-        }
-
-        // Patch extracted .so files: replace DT_NEEDED "libc.so" with
-        // "libb.so" in-place so the musl ABI bridge resolves first.
-        val libsDir = File(targetDir, "libs")
-        if (libsDir.isDirectory) {
-            libsDir.walkTopDown()
-                .filter { it.isFile && it.extension == "so" }
-                .forEach { soFile ->
-                    try {
-                        if (!ElfPatcher.patchSo(soFile.absolutePath)) {
-                            LogWriter.w(TAG, "ELF patch skipped or failed: ${soFile.name}")
+            // Stream files directly from ZIP to disk to avoid OOM on large HAPs.
+            ZipFile(bundle.hapFile).use { zip ->
+                // .abc bytecode
+                for (path in listOf("ets/modules.abc", "ets/modules_static.abc")) {
+                    zip.getEntry(path)?.let { entry ->
+                        val file = File(targetDir, path)
+                        file.parentFile?.mkdirs()
+                        zip.getInputStream(entry).use { input ->
+                            file.outputStream().use { out -> input.copyTo(out) }
                         }
-                    } catch (e: UnsatisfiedLinkError) {
-                        LogWriter.w(TAG, "ELF patch JNI not available, skipping: ${soFile.name}", e)
                     }
                 }
+
+                // resources.index
+                zip.getEntry("resources.index")?.let { entry ->
+                    val file = File(targetDir, "resources.index")
+                    zip.getInputStream(entry).use { input ->
+                        file.outputStream().use { out -> input.copyTo(out) }
+                    }
+                }
+
+                // Resource files under resources/
+                val entries = zip.entries()
+                while (entries.hasMoreElements()) {
+                    val entry = entries.nextElement()
+                    val name = entry.name
+                    if ((name.startsWith("resources/") || (name.startsWith("libs/") && name.endsWith(".so")))
+                        && !entry.isDirectory) {
+                        val file = HapPaths.resolve(targetDir, name)
+                        file.parentFile?.mkdirs()
+                        zip.getInputStream(entry).use { input ->
+                            file.outputStream().use { out -> input.copyTo(out) }
+                        }
+                    }
+                }
+            }
+
+            // Extract pkgContextInfo.json from HAP (contains all npm dependency info)
+            var pkgContextJson: String? = null
+            ZipFile(bundle.hapFile).use { zip ->
+                zip.getEntry("pkgContextInfo.json")?.let { entry ->
+                    zip.getInputStream(entry).use { input ->
+                        pkgContextJson = input.reader().readText()
+                    }
+                }
+            }
+
+            // Patch extracted .so files: replace DT_NEEDED "libc.so" with
+            // "libb.so" in-place so the musl ABI bridge resolves first.
+            val libsDir = File(targetDir, "libs")
+            if (libsDir.isDirectory) {
+                libsDir.walkTopDown()
+                    .filter { it.isFile && it.extension == "so" }
+                    .forEach(patchLibrary)
+            }
+
+            // Detect if HAP has native .so files
+            val hasNativeLibs = File(targetDir, "libs").isDirectory &&
+                File(targetDir, "libs").walkTopDown().any { it.isFile && it.extension == "so" }
+
+            // Write pkgContextInfo.json (required by StageAssetProvider.GetPkgJsonBuffer)
+            writePkgContextInfo(targetDir, fullModuleName, hasNativeLibs, pkgContextJson)
         }
-
-        // Detect if HAP has native .so files
-        val hasNativeLibs = File(targetDir, "libs").isDirectory &&
-            File(targetDir, "libs").walkTopDown().any { it.isFile && it.extension == "so" }
-
-        // Write pkgContextInfo.json (required by StageAssetProvider.GetPkgJsonBuffer)
-        writePkgContextInfo(targetDir, fullModuleName, bundle.moduleConfig.type, hasNativeLibs, pkgContextJson)
 
         val mainAbility = bundle.moduleConfig.mainElement.ifBlank {
             bundle.moduleConfig.abilities.firstOrNull()?.name ?: ""
@@ -137,13 +150,13 @@ class HapInstaller(private val context: Context) {
         return InstalledHap(
             bundleName = bundleName,
             moduleName = moduleName,
-            contentDir = targetDir,
+            contentDir = installedDir,
             moduleConfig = bundle.moduleConfig,
             mainAbility = mainAbility
         )
     }
 
-    private fun writePkgContextInfo(targetDir: File, fullModuleName: String, moduleType: String, hasNativeLibs: Boolean, originalJson: String?) {
+    private fun writePkgContextInfo(targetDir: File, fullModuleName: String, hasNativeLibs: Boolean, originalJson: String?) {
         // OHOS-format pkgContextInfo.json expected by js_runtime.cpp::ParsePkgContextInfoJson.
         // If the HAP ships its own pkgContextInfo.json, use it as the base and fill in
         // moduleName/bundleName for any entries that have them empty (npm dependencies).
@@ -187,39 +200,41 @@ class HapInstaller(private val context: Context) {
 
     fun getInstalledHaps(): List<InstalledHap> {
         if (!baseDir.exists()) return emptyList()
+        return HapFileLock.withLock(baseDir) {
+            storage.recover()
+            baseDir.listFiles()
+                ?.filter { it.isDirectory && !it.name.startsWith('.') }
+                ?.mapNotNull { moduleDir ->
+                    // Directory name format: bundleName.moduleName
+                    val dirName = moduleDir.name
+                    val dotIndex = dirName.lastIndexOf('.')
+                    if (dotIndex < 0) return@mapNotNull null
 
-        return baseDir.listFiles()
-            ?.filter { it.isDirectory }
-            ?.mapNotNull { moduleDir ->
-                // Directory name format: bundleName.moduleName
-                val dirName = moduleDir.name
-                val dotIndex = dirName.lastIndexOf('.')
-                if (dotIndex < 0) return@mapNotNull null
+                    val bundleName = dirName.substring(0, dotIndex)
+                    val moduleName = dirName.substring(dotIndex + 1)
 
-                val bundleName = dirName.substring(0, dotIndex)
-                val moduleName = dirName.substring(dotIndex + 1)
+                    val moduleJson = File(moduleDir, "module.json")
+                    if (!moduleJson.exists()) return@mapNotNull null
 
-                val moduleJson = File(moduleDir, "module.json")
-                if (!moduleJson.exists()) return@mapNotNull null
+                    val config = try {
+                        HapBundleLoader().parseModuleJson(moduleJson.readText())
+                    } catch (_: Exception) {
+                        return@mapNotNull null
+                    }
 
-                val config = try {
-                    HapBundleLoader().parseModuleJson(moduleJson.readText())
-                } catch (_: Exception) {
-                    return@mapNotNull null
-                }
+                    val mainAbility = config.mainElement.ifBlank {
+                        config.abilities.firstOrNull()?.name ?: ""
+                    }
 
-                val mainAbility = config.mainElement.ifBlank {
-                    config.abilities.firstOrNull()?.name ?: ""
-                }
-
-                InstalledHap(
-                    bundleName = bundleName,
-                    moduleName = moduleName,
-                    contentDir = moduleDir,
-                    moduleConfig = config,
-                    mainAbility = mainAbility
-                )
-            } ?: emptyList()
+                    InstalledHap(
+                        bundleName = bundleName,
+                        moduleName = moduleName,
+                        contentDir = moduleDir,
+                        moduleConfig = config,
+                        mainAbility = mainAbility
+                    )
+                } ?: emptyList()
+        }
     }
 
     companion object {
@@ -227,16 +242,28 @@ class HapInstaller(private val context: Context) {
     }
 
     fun uninstall(bundleName: String) {
-        // Remove all modules matching this bundleName from hap/ and sys/
-        if (baseDir.exists()) {
-            baseDir.listFiles()
-                ?.filter { it.isDirectory && it.name.startsWith("$bundleName.") }
-                ?.forEach { it.deleteRecursively() }
+        HapPaths.validateNames(bundleName, "entry")
+        HapFileLock.withLock(baseDir) {
+            ensureStopped(bundleName)
+            storage.recover()
+            // Module names cannot contain dots. Compare the full bundle name,
+            // otherwise uninstalling com.example also deletes com.example.other.
+            for (root in listOf(baseDir, sysDir)) {
+                root.listFiles()
+                    ?.filter { it.isDirectory && !it.name.startsWith('.') &&
+                        it.name.substringBeforeLast('.', "") == bundleName }
+                    ?.forEach {
+                        if (!it.deleteRecursively()) throw java.io.IOException("Cannot uninstall module: $it")
+                    }
+            }
         }
-        if (sysDir.exists()) {
-            sysDir.listFiles()
-                ?.filter { it.isDirectory && it.name.startsWith("$bundleName.") }
-                ?.forEach { it.deleteRecursively() }
-        }
+    }
+
+    private fun ensureStopped(bundleName: String) {
+        check(slots.activeContentDirs().none { path ->
+            val module = File(path).canonicalFile
+            module.parentFile == baseDir.canonicalFile &&
+                module.name.substringBeforeLast('.', "") == bundleName
+        }) { "HAP $bundleName is running; close it before installing or uninstalling" }
     }
 }

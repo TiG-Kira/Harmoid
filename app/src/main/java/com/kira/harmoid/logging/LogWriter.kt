@@ -11,7 +11,7 @@ import java.util.Locale
 
 object LogWriter {
 
-    private var logDir: File? = null
+    @Volatile private var logDir: File? = null
     private val lock = Any()
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd", Locale.US)
     private val timeFormat = SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
@@ -53,24 +53,24 @@ object LogWriter {
     fun getLogDir(): File? = logDir
 
     private fun write(level: String, tag: String, msg: String, tr: Throwable?) {
-        val dir = logDir ?: return
-        val timestamp = timeFormat.format(Date())
-        val line = buildString {
-            append(timestamp)
-            append(' ')
-            append(level)
-            append('/')
-            append(tag)
-            append(": ")
-            append(msg)
-            if (tr != null) {
-                append('\n')
-                append(throwableToString(tr))
-            }
-            append('\n')
-        }
-
         synchronized(lock) {
+            val dir = logDir ?: return
+            val timestamp = timeFormat.format(Date())
+            val line = buildString {
+                append(timestamp)
+                append(' ')
+                append(level)
+                append('/')
+                append(tag)
+                append(": ")
+                append(msg)
+                if (tr != null) {
+                    append('\n')
+                    append(throwableToString(tr))
+                }
+                append('\n')
+            }
+
             try {
                 val today = dateFormat.format(Date())
                 val file = File(dir, "hoa_$today.log")

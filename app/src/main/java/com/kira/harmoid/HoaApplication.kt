@@ -1,6 +1,7 @@
 package com.kira.harmoid
 
 import android.webkit.WebView
+import com.kira.harmoid.bridge.ActivityTracker
 import com.kira.harmoid.device.BuildSpoofer
 import com.kira.harmoid.device.DeviceProfile
 import com.kira.harmoid.device.DeviceProfileStore
@@ -17,6 +18,9 @@ class HoaApplication : StageApplication() {
     var initError: Throwable? = null
         private set
 
+    // StageApplication eagerly loads the native engine; the launcher process
+    // intentionally bypasses it. HAP workers call it inside initArkUIX().
+    @android.annotation.SuppressLint("MissingSuperCall")
     override fun onCreate() {
         LogWriter.init(getExternalFilesDir(null) ?: filesDir)
         LogWriter.e(TAG, "========== HOA Application onCreate START ==========")
@@ -26,6 +30,7 @@ class HoaApplication : StageApplication() {
         // crash buffer 经常被后续日志冲掉，而 LogWriter 写的是外部存储上的文件，
         // 进程死了也还在。排查「进 HAP 闪退」这类问题就靠它。
         installCrashLogger()
+        ActivityTracker.initialize(this)
 
         // 机型模拟必须抢在任何会读 Build 的代码之前：
         // ArkUI-X 的 DeviceInfoPlugin 是 Java 类，字段读取发生在 Java 侧，
@@ -44,6 +49,10 @@ class HoaApplication : StageApplication() {
         if (isHapProcess()) {
             LogWriter.e(TAG, "HAP process detected — initializing ArkUI-X runtime")
             initArkUIX()
+            if (!initSuccess) {
+                RuntimeErrorActivity.abortWorker(this,
+                    initError?.message ?: "HarmonyOS runtime initialization failed", initError)
+            }
         } else {
             LogWriter.e(TAG, "Main process — skipping ArkUI-X init (not needed for launcher)")
             // Load libb.so (musl ABI bridge) even in the main process.
@@ -83,6 +92,8 @@ class HoaApplication : StageApplication() {
             LogWriter.e(TAG, "System.loadLibrary(\"b\") — SUCCESS")
         } catch (e: UnsatisfiedLinkError) {
             LogWriter.e(TAG, "System.loadLibrary(\"b\") — FAILED", e)
+            initError = e
+            return
         }
 
         // Try explicit native library load first for better error reporting
@@ -95,6 +106,7 @@ class HoaApplication : StageApplication() {
             val libFile = java.io.File(applicationInfo.nativeLibraryDir, "libarkui_android.so")
             LogWriter.e(TAG, "  libarkui_android.so exists: ${libFile.exists()}, size: ${if (libFile.exists()) libFile.length() else 0}")
             initError = e
+            return
         }
 
         // Pre-load HDS (Huawei Design System) stub so its NAPI module
@@ -169,18 +181,18 @@ class HoaApplication : StageApplication() {
         // By default ArkUI-X sets filesDir to the app-level path so all HAPs
         // share files/preference/, files/database/, etc.  We override with the
         // HAP module directory so each HAP gets its own isolated data sandbox.
-        redirectStorageToHapModule()
-
         try {
+            redirectStorageToHapModule()
             super.onCreate()
-            initSuccess = true
             LogWriter.e(TAG, "StageApplication.onCreate() completed successfully")
-        } catch (e: UnsatisfiedLinkError) {
-            LogWriter.e(TAG, "FATAL: UnsatisfiedLinkError during StageApplication.onCreate()", e)
+        } catch (e: LinkageError) {
+            LogWriter.e(TAG, "FATAL: LinkageError during StageApplication.onCreate()", e)
             initError = e
+            return
         } catch (e: Exception) {
             LogWriter.e(TAG, "FATAL: StageApplication.onCreate() failed", e)
             initError = e
+            return
         }
 
         // Enable OHOS HAP mode AFTER super.onCreate() because the JNI methods
@@ -188,15 +200,17 @@ class HoaApplication : StageApplication() {
         // AppModeConfig.nativeInitAppMode() → StageJniRegistry::Register().
         try {
             StageApplication.setOhosHapMode(true)
+            initSuccess = true
             LogWriter.e(TAG, "setOhosHapMode(true) OK")
         } catch (e: UnsatisfiedLinkError) {
             LogWriter.e(TAG, "setOhosHapMode not available in current .so — patches inactive", e)
+            initError = e
         }
     }
 
     private fun isHapProcess(): Boolean {
         val name = currentProcessName()
-        return name.contains(":hap")
+        return extractSlot(name) in 0 until ProcessSlotManager.MAX_SLOTS
     }
 
     /**
@@ -248,15 +262,18 @@ class HoaApplication : StageApplication() {
         }
 
         val contentDir = ProcessSlotManager.getContentDir(this, slot)
-        if (contentDir == null) {
-            LogWriter.w(TAG, "redirectStorageToHapModule: no contentDir for slot $slot — " +
-                "slot may not have been allocated with contentDir yet")
-            return
+        checkNotNull(contentDir) { "Missing HAP identity for process slot $slot; launch from the app list" }
+        val root = File(filesDir, "hap").canonicalFile
+        val module = File(contentDir).canonicalFile
+        check(module.parentFile == root && File(module, "module.json").isFile) {
+            "HAP module is missing or outside its installation directory: $module"
         }
+        ProcessSlotManager.claimSlot(this, slot, contentDir)
 
         // Ensure storage subdirectories exist under the HAP module dir
         for (sub in arrayOf("temp", "files", "preference", "database", "cache")) {
-            File(contentDir, sub).mkdirs()
+            val dir = File(contentDir, sub)
+            check(dir.isDirectory || dir.mkdirs()) { "Cannot create HAP storage directory: $dir" }
         }
 
         StageApplicationDelegate.sModuleDataDir = contentDir
@@ -268,19 +285,13 @@ class HoaApplication : StageApplication() {
      * "com.kira.harmoid:hap3" → 3.  Returns -1 on failure.
      */
     private fun extractSlot(procName: String): Int {
-        val idx = procName.lastIndexOf(":hap")
-        if (idx < 0) return -1
-        return procName.substring(idx + 4).toIntOrNull() ?: -1
+        val prefix = "$packageName:hap"
+        if (!procName.startsWith(prefix)) return -1
+        return procName.removePrefix(prefix).toIntOrNull() ?: -1
     }
 
     private fun currentProcessName(): String {
-        // ActivityManager.getRunningAppProcesses() works reliably on all API levels.
-        val pid = android.os.Process.myPid()
-        val manager = getSystemService(android.app.ActivityManager::class.java)
-        manager?.runningAppProcesses?.forEach { info ->
-            if (info.pid == pid) return info.processName
-        }
-        return "unknown"
+        return android.app.Application.getProcessName()
     }
 
     companion object {

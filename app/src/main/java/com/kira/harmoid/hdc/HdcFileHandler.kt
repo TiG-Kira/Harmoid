@@ -1,169 +1,95 @@
 package com.kira.harmoid.hdc
 
 import java.io.File
-import java.io.FileOutputStream
+import java.util.concurrent.ConcurrentHashMap
 
+/** HDC file send shares the checked chunk receiver used by HAP installation. */
 class HdcFileHandler(private val daemon: HdcDaemon) {
+    private data class State(val path: File, val transfer: IncomingTransfer? = null)
+    private val states = ConcurrentHashMap<Int, State>()
 
-    private data class FileTransferState(
-        val dstPath: String = "",
-        val fileSize: Long = 0,
-        val received: Long = 0,
-        val outStream: FileOutputStream? = null
-    )
-
-    private val states = mutableMapOf<Int, FileTransferState>()
-
-    private fun remapPath(rawPath: String): String {
-        val trimmed = rawPath.trimStart('/')
-        val cacheDir = daemon.getApplicationContext()?.cacheDir?.absolutePath
-            ?: return rawPath
-        return when {
-            trimmed.startsWith("data/local/tmp/") ->
-                "$cacheDir/hdc/${trimmed.removePrefix("data/local/tmp/")}"
-            rawPath.startsWith("/data/local/tmp/") ->
-                "$cacheDir/hdc/${rawPath.removePrefix("/data/local/tmp/")}"
-            else -> rawPath
-        }
-    }
+    private fun cacheDir(): File = checkNotNull(daemon.getApplicationContext()).cacheDir
 
     fun handleFileInit(data: ByteArray, session: HdcSession) {
-        val cmdLine = String(data, Charsets.UTF_8).trim()
-        daemon.log("CMD_FILE_INIT: cmdLine=$cmdLine")
-
-        val parts = cmdLine.split(Regex("\\s+"))
-        val rawPath = if (parts.size >= 3) parts[2] else cmdLine
-        val dstPath = remapPath(rawPath)
-        daemon.log("CMD_FILE_INIT: raw=$rawPath remapped=$dstPath")
-
-        val parentDir = File(dstPath).parentFile
-        if (parentDir != null && !parentDir.exists()) {
-            parentDir.mkdirs()
-            daemon.log("Created parent dir: ${parentDir.absolutePath}")
+        try {
+            val command = String(data, Charsets.UTF_8).trim()
+            val tokens = Regex("\"[^\"]*\"|'[^']*'|\\S+").findAll(command).map { it.value.trim('"', '\'') }.toList()
+            val destination = tokens.lastOrNull() ?: throw IllegalArgumentException("Missing HDC destination")
+            val path = HdcPaths.resolve(cacheDir(), destination)
+            states.put(session.channelId, State(path))?.transfer?.abort()
+        } catch (e: Exception) {
+            fail(session, e)
         }
-
-        states[session.channelId] = FileTransferState(dstPath = dstPath)
-        daemon.log("CMD_FILE_INIT: dstPath=$dstPath channelId=${session.channelId}")
     }
 
     fun handleFileCheck(data: ByteArray, session: HdcSession) {
-        val config = TransferConfig.fromBytes(data)
-        daemon.log("CMD_FILE_CHECK: fileSize=${config.fileSize} path=${config.path} " +
-            "optionalName=${config.optionalName}")
-
-        val state = states[session.channelId]
-        val (outPath, existingState) = if (state != null) {
-            Pair(if (config.path.isNotEmpty()) remapPath(config.path) else state.dstPath, state)
-        } else {
-            daemon.log("CMD_FILE_CHECK: no prior INIT, using config path")
-            val raw = if (config.path.isNotEmpty()) config.path
-                else "/data/local/tmp/${config.optionalName}"
-            val path = remapPath(raw)
-            daemon.log("CMD_FILE_CHECK: raw=$raw remapped=$path")
-            Pair(path, FileTransferState(dstPath = path))
-        }
-
-        val finalPath = if (outPath.isNotEmpty()) {
-            if (config.optionalName.isNotEmpty()) "$outPath/${config.optionalName}" else outPath
-        } else {
-            val tempDir = daemon.getApplicationContext()?.cacheDir?.absolutePath
-                ?: "/data/local/tmp"
-            "$tempDir/${config.optionalName}"
-        }
-
-        val parentDir = File(finalPath).parentFile
-        if (parentDir != null && !parentDir.exists()) {
-            parentDir.mkdirs()
-        }
-
+        var transfer: IncomingTransfer? = null
         try {
-            val fos = FileOutputStream(finalPath, false)
-            states[session.channelId] = existingState.copy(
-                dstPath = finalPath,
-                fileSize = config.fileSize,
-                outStream = fos,
-                received = 0
-            )
-            daemon.log("Opened file for writing: $finalPath size=${config.fileSize}")
-
+            val config = TransferConfig.fromBytes(data)
+            require(config.fileSize >= 0) { "Invalid transfer size" }
+            require(config.compressType in 0..1) { "Unsupported HDC compression" }
+            val previous = states.remove(session.channelId)
+            previous?.transfer?.abort()
+            val rawPath = config.path.ifBlank { "/data/local/tmp/" }
+            val destination = if (config.path.isBlank() && previous != null) previous.path
+                else HdcPaths.resolve(cacheDir(), rawPath)
+            // Existing directories and a trailing slash select directory mode;
+            // an explicit filename is not incorrectly treated as a directory.
+            val root = File(cacheDir(), "hdc").canonicalFile
+            val directoryHint = config.path.endsWith('/') || (config.path.isBlank() && previous == null)
+            val file = if (destination.isDirectory || directoryHint || destination == root) {
+                HdcPaths.child(destination, config.optionalName)
+            } else destination
+            check(file.parentFile?.let { it.isDirectory || it.mkdirs() } == true) { "Cannot create transfer directory" }
+            require(config.fileSize <= cacheDir().usableSpace) { "Not enough storage for file transfer" }
+            transfer = IncomingTransfer(file, config.fileSize)
+            states[session.channelId] = State(file, transfer)
             session.sendPacket(CMD_FILE_BEGIN, CMD_FILE_BEGIN_FLAGS)
-            daemon.log("Sent CMD_FILE_BEGIN for channelId=${session.channelId}")
+            if (transfer.complete) complete(session)
         } catch (e: Exception) {
-            daemon.log("CMD_FILE_CHECK failed to open $finalPath: ${e.message}")
-            states.remove(session.channelId)
-            finishFileChannel(session)
+            transfer?.abort()
+            fail(session, e)
         }
     }
 
     fun handleFileData(data: ByteArray, session: HdcSession) {
-        val state = states[session.channelId]
-        if (state == null) {
-            daemon.log("CMD_FILE_DATA: no state for channelId=${session.channelId}")
-            return
-        }
-        val fos = state.outStream
-        if (fos == null) {
-            daemon.log("CMD_FILE_DATA: file not open for channelId=${session.channelId}")
-            return
-        }
-
+        val transfer = states[session.channelId]?.transfer ?: return
         try {
-            val headerBytes = data.copyOfRange(0, PAYLOAD_PREFIX_RESERVE)
-            val payload = TransferPayload.fromBytes(headerBytes)
-            val fileData = data.copyOfRange(PAYLOAD_PREFIX_RESERVE, data.size)
-            val pct = if (state.fileSize > 0) (state.received + fileData.size) * 100 / state.fileSize else 0
-            daemon.log("CMD_FILE_DATA: idx=${payload.index} compType=${payload.compressType} " +
-                "fileDataSize=${fileData.size} progress=$pct%")
-
-            fos.write(fileData)
-            val newReceived = state.received + fileData.size
-            states[session.channelId] = state.copy(received = newReceived)
-
-            if (newReceived >= state.fileSize && state.fileSize > 0) {
-                daemon.log("All file data received ($newReceived/${state.fileSize})")
-                closeState(session)
-                // Send FILE_FINISH(0) to signal completion, then CHANNEL_CLOSE
-                session.sendPacket(CMD_FILE_FINISH, byteArrayOf(0))
-                daemon.log("Sent CMD_FILE_FINISH for channelId=${session.channelId}")
-                session.sendPacket(CMD_KERNEL_CHANNEL_CLOSE, byteArrayOf(1))
-                session.resetChannel()
-                return
-            }
+            transfer.accept(data)
+            if (transfer.complete) complete(session)
         } catch (e: Exception) {
-            daemon.log("CMD_FILE_DATA write error: ${e.message}")
-            closeState(session)
-            finishFileChannel(session)
-            return
+            fail(session, e)
         }
     }
 
     fun handleFileFinish(data: ByteArray, session: HdcSession) {
-        daemon.log("CMD_FILE_FINISH: host sent finish for channelId=${session.channelId}")
-        val state = states.remove(session.channelId)
-        if (state != null) {
-            try { state.outStream?.close() } catch (_: Exception) {}
-            daemon.log("File transfer done: dst=${state.dstPath} " +
-                "received=${state.received}/${state.fileSize}")
-        } else {
-            daemon.log("CMD_FILE_FINISH: no state, sending ack")
-        }
+        val transfer = states[session.channelId]?.transfer
+        if (transfer != null && !transfer.complete) {
+            fail(session, IllegalArgumentException("Incomplete file: ${transfer.received}/${transfer.expectedSize}"))
+        } else complete(session)
+    }
+
+    private fun complete(session: HdcSession) {
+        states.remove(session.channelId)?.transfer?.close()
         session.sendPacket(CMD_FILE_FINISH, byteArrayOf(0))
         session.sendPacket(CMD_KERNEL_CHANNEL_CLOSE, byteArrayOf(1))
         session.resetChannel()
     }
 
-    private fun closeState(session: HdcSession) {
-        val state = states.remove(session.channelId)
-        try { state?.outStream?.close() } catch (_: Exception) {}
-        if (state != null) {
-            daemon.log("File transfer done: dst=${state.dstPath} " +
-                "received=${state.received}/${state.fileSize}")
+    private fun fail(session: HdcSession, cause: Exception) {
+        states.remove(session.channelId)?.transfer?.let {
+            try { it.abort() } catch (e: Exception) { daemon.log("Transfer cleanup failed: ${e.message}") }
         }
-    }
-
-    private fun finishFileChannel(session: HdcSession) {
-        session.sendPacket(CMD_FILE_FINISH, byteArrayOf(0))
+        daemon.log("File transfer failed: ${cause.message}")
+        session.sendPacket(CMD_KERNEL_ECHO_RAW, "[Fail] ${cause.message}".toByteArray())
         session.sendPacket(CMD_KERNEL_CHANNEL_CLOSE, byteArrayOf(1))
         session.resetChannel()
+    }
+
+    fun close() {
+        for (key in states.keys) {
+            val transfer = states.remove(key)?.transfer ?: continue
+            try { transfer.abort() } catch (e: Exception) { daemon.log("Transfer cleanup failed: ${e.message}") }
+        }
     }
 }

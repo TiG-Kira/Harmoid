@@ -93,6 +93,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun AboutScreen(onBack: () -> Unit) {
     val context = LocalContext.current
+    val resources = androidx.compose.ui.platform.LocalResources.current
     // 本页在 MainScreen 取景层之外，自建一层供玻璃顶栏折射页面内容
     val glassPage = rememberGlassPageBackdrop()
     val scrollBehavior = MiuixScrollBehavior()
@@ -181,14 +182,13 @@ fun AboutScreen(onBack: () -> Unit) {
     )
 
     // Dual-track background: API 33+ RuntimeShader animated, older Brush fallback
-    val useShaderBg = android.os.Build.VERSION.SDK_INT >= 31
     var bgController by remember { mutableStateOf<AboutBgEffect.ShaderController?>(null) }
     var bgDarkTheme by remember { mutableStateOf(darkTheme) }
 
     Box(
         modifier = Modifier.fillMaxSize().background(MiuixTheme.colorScheme.surface)
     ) {
-        if (useShaderBg) {
+        if (android.os.Build.VERSION.SDK_INT >= 33) {
             AndroidView(
                 modifier = Modifier.fillMaxSize().graphicsLayer { alpha = (1f - scrollFraction) * (if (darkTheme) 0.5f else 1f) }.blur(120.dp).zIndex(-1f),
                 factory = { ctx ->
@@ -205,6 +205,10 @@ fun AboutScreen(onBack: () -> Unit) {
                         bgController?.updateParams(AboutBgEffect.getParams(darkTheme))
                         bgDarkTheme = darkTheme
                     }
+                },
+                onRelease = {
+                    bgController?.stop()
+                    bgController = null
                 }
             )
         } else {
@@ -428,11 +432,11 @@ fun AboutScreen(onBack: () -> Unit) {
                                             checkingUpdate = false
                                             updateSummary = when (result) {
                                                 is UpdateChecker.Result.UpdateAvailable ->
-                                                    context.getString(R.string.new_version_available)
+                                                    resources.getString(R.string.new_version_available)
                                                 is UpdateChecker.Result.UpToDate ->
-                                                    context.getString(R.string.up_to_date)
+                                                    resources.getString(R.string.up_to_date)
                                                 is UpdateChecker.Result.Error ->
-                                                    context.getString(R.string.about_check_updates_desc)
+                                                    resources.getString(R.string.about_check_updates_desc)
                                             }
                                             UpdateChecker.showResult(context, result)
                                         }

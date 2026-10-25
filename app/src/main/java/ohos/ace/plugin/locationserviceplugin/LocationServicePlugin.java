@@ -52,8 +52,6 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
-import java.lang.reflect.InvocationTargetException;
-import java.lang.reflect.Field;
 
 import ohos.ace.adapter.ALog;
 
@@ -115,9 +113,7 @@ public class LocationServicePlugin {
     private int receivedFixCount = 0;
     private final Object geofenceLock = new Object();
 
-    private Location currentLocation;
 
-    private final CountDownLatch latch = new CountDownLatch(1);
 
     private Activity mActivity;
 
@@ -178,8 +174,7 @@ public class LocationServicePlugin {
                 return;
             }
             String deviceId = (result.getDevice() != null) ? result.getDevice().getAddress() : "";
-            String deviceName = (result.getDevice() != null && result.getDevice().getName() != null)
-                ? result.getDevice().getName() : "";
+            String deviceName = ohos.ace.plugin.bluetoothplugin.BluetoothHelper.scanDeviceName(result);
             int rssi = result.getRssi();
             byte[] adv = (result.getScanRecord() != null && result.getScanRecord().getBytes() != null)
                 ? result.getScanRecord().getBytes() : new byte[0];
@@ -281,81 +276,88 @@ public class LocationServicePlugin {
         }
     }
 
-public Location getCurrentLocation() {
+    public Location getCurrentLocation() {
         ensureLocationManagerInitialized();
-        Location lastKnownLocation = getLastKnownLocation();
-        if (lastKnownLocation != null) {
-            return lastKnownLocation;
+        if (locationManager == null) return null;
+        Location lastKnown = getLastKnownLocation();
+        if (lastKnown != null) return lastKnown;
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            ALog.w(LOG_TAG, "Cannot wait for a location fix on the UI thread");
+            return null;
         }
-
+        CountDownLatch ready = new CountDownLatch(1);
+        java.util.concurrent.atomic.AtomicReference<Location> result = new java.util.concurrent.atomic.AtomicReference<>();
         LocationListener listener = new LocationListener() {
-            @Override
-            public void onLocationChanged(Location location) {
-                currentLocation = location;
-                latch.countDown();
-                stopListener();
+            @Override public void onLocationChanged(Location location) {
+                result.set(location);
+                ready.countDown();
+                stopListener(this);
             }
-
-            @Override
-            public void onStatusChanged(String provider, int status, Bundle extras) {}
-
-            @Override
-            public void onProviderEnabled(String provider) {}
-
-            @Override
-            public void onProviderDisabled(String provider) {}
+            @Override public void onStatusChanged(String provider, int status, Bundle extras) { }
+            @Override public void onProviderEnabled(String provider) { }
+            @Override public void onProviderDisabled(String provider) { }
         };
-        registerListener(listener);
-
+        if (!registerListener(listener)) return null;
         try {
-            latch.await(TIMEOUT, java.util.concurrent.TimeUnit.MILLISECONDS);
+            ready.await(TIMEOUT, java.util.concurrent.TimeUnit.MILLISECONDS);
         } catch (InterruptedException e) {
-            ALog.e(LOG_TAG, "latch await interrupted, no upper logic to handle" + e);
+            Thread.currentThread().interrupt();
         } finally {
             stopListener(listener);
         }
-
-        return currentLocation;
+        return result.get();
     }
 
     private Location getLastKnownLocation() {
-        Location gpsLocation = null;
-        Location networkLocation = null;
-        ensureLocationManagerInitialized();
-        if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            gpsLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
-        }
-        if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-            networkLocation = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
-        }
+        try {
+            Location gpsLocation = null;
+            Location networkLocation = null;
+            ensureLocationManagerInitialized();
+            if (locationManager == null) return null;
+            if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                gpsLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER);
+            }
+            if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
+                networkLocation = locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER);
+            }
 
-        if (gpsLocation != null && networkLocation != null) {
-            return gpsLocation.getTime() > networkLocation.getTime() ? gpsLocation : networkLocation;
-        } else {
+            if (gpsLocation != null && networkLocation != null) {
+                return gpsLocation.getTime() > networkLocation.getTime() ? gpsLocation : networkLocation;
+            }
             return gpsLocation != null ? gpsLocation : networkLocation;
+        } catch (SecurityException e) {
+            ALog.w(LOG_TAG, "Location permission denied");
+            return null;
         }
     }
 
-    private void registerListener(LocationListener listener) {
+    private boolean registerListener(LocationListener listener) {
         ensureLocationManagerInitialized();
-        if (locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER)) {
-            locationManager.requestLocationUpdates(
-                    LocationManager.NETWORK_PROVIDER,
-                    0, 0,
-                    listener);
-        }
-        if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
-            locationManager.requestLocationUpdates(
-                    LocationManager.GPS_PROVIDER,
-                    0, 0,
-                    listener);
+        if (locationManager == null) return false;
+        try {
+            boolean registered = false;
+            for (String provider : new String[] {LocationManager.NETWORK_PROVIDER, LocationManager.GPS_PROVIDER}) {
+                if (locationManager.isProviderEnabled(provider)) {
+                    locationManager.requestLocationUpdates(provider, 0, 0, listener, Looper.getMainLooper());
+                    registered = true;
+                }
+            }
+            return registered;
+        } catch (SecurityException e) {
+            stopListener(listener);
+            ALog.w(LOG_TAG, "Location permission revoked before registration");
+            return false;
         }
     }
 
     private void stopListener(LocationListener listener) {
         ensureLocationManagerInitialized();
-        if (listener != null) {
-            locationManager.removeUpdates(listener);
+        if (listener != null && locationManager != null) {
+            try {
+                locationManager.removeUpdates(listener);
+            } catch (SecurityException e) {
+                ALog.w(LOG_TAG, "Location permission revoked while removing updates");
+            }
         }
     }
 
@@ -458,7 +460,8 @@ public Location getCurrentLocation() {
         IntentFilter filter = new IntentFilter();
         filter.addAction(Intent.ACTION_LOCALE_CHANGED);
         filter.addAction(TelephonyManager.ACTION_PHONE_STATE_CHANGED);
-        context.registerReceiver(localeReceiver, filter);
+        androidx.core.content.ContextCompat.registerReceiver(context, localeReceiver,
+                filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED);
         countryCodeRegistered = true;
     }
 
@@ -547,9 +550,10 @@ public Location getCurrentLocation() {
             };
         }
 
-        boolean ok = locationManager.addNmeaListener(nmeaListener);
-        if (ok) {
-            nmeaRegistered = true;
+        try {
+            nmeaRegistered = locationManager.addNmeaListener(nmeaListener);
+        } catch (SecurityException e) {
+            ALog.w(LOG_TAG, "NMEA location permission revoked");
         }
     }
 
@@ -694,7 +698,7 @@ public Location getCurrentLocation() {
                     LocationManager.GPS_PROVIDER,
                     1000L,
                     0f,
-                    locationListener);
+                    locationListener, Looper.getMainLooper());
                 ALog.i(LOG_TAG, "Force GPS request to trigger GNSS scan");
             } else {
                 ALog.i(LOG_TAG, "GPS provider disabled, skip force request");
@@ -776,11 +780,8 @@ public Location getCurrentLocation() {
             bluetoothLeScanner.startScan(scanCallback);
             ALog.i(LOG_TAG, "BLE scan started");
             return SUCCESS;
-        } catch (IllegalArgumentException | IllegalStateException e) {
+        } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
             ALog.e(LOG_TAG, "startScan exception: " + e.getMessage());
-            return FAIL;
-        } catch (SecurityException e) {
-            ALog.e(LOG_TAG, "startScan missing permission: " + e.getMessage());
             return FAIL;
         }
     }
@@ -794,7 +795,7 @@ public Location getCurrentLocation() {
         }
         try {
             bluetoothLeScanner.stopScan(scanCallback);
-        } catch (IllegalArgumentException | IllegalStateException e) {
+        } catch (SecurityException | IllegalArgumentException | IllegalStateException e) {
             ALog.e(LOG_TAG, "stopScan exception: " + e.getMessage());
         }
     }
@@ -834,7 +835,8 @@ public Location getCurrentLocation() {
             long minTimeMs = Math.max(0, timeIntervalSec) * 1000L;
             float minDistance = (float) Math.max(0.0, distanceIntervalMeter);
 
-            locationManager.requestLocationUpdates(provider, minTimeMs, minDistance, locationListener);
+            locationManager.requestLocationUpdates(provider, minTimeMs, minDistance, locationListener,
+                Looper.getMainLooper());
             return SUCCESS;
         } catch (SecurityException se) {
             ALog.e(LOG_TAG, "registerLocationChangeCallbackWithConfig security: " + se.getMessage());
@@ -1217,7 +1219,8 @@ public Location getCurrentLocation() {
             }
         };
         IntentFilter filter = new IntentFilter(ACTION_GEOFENCE);
-        context.registerReceiver(geofenceReceiver, filter);
+        androidx.core.content.ContextCompat.registerReceiver(context, geofenceReceiver,
+                filter, androidx.core.content.ContextCompat.RECEIVER_NOT_EXPORTED);
         geofenceReceiverRegistered = true;
         ALog.i(LOG_TAG, "Geofence receiver registered");
     }
@@ -1258,7 +1261,7 @@ public Location getCurrentLocation() {
     private PendingIntent createPendingIntent(int fenceId, Intent broadcastIntent) {
         int flags = PendingIntent.FLAG_UPDATE_CURRENT;
         if (Build.VERSION.SDK_INT >= VERSION_CODES_S) {
-            flags |= FLAG_MUTABLE;
+            flags |= PendingIntent.FLAG_MUTABLE;
         }
 
         return PendingIntent.getBroadcast(
@@ -1344,61 +1347,7 @@ public Location getCurrentLocation() {
     }
 
     private Activity getMainActivity() {
-        try {
-            Class<?> activityThreadClass = Class.forName("android.app.ActivityThread");
-            Object activityThread = activityThreadClass.getMethod("currentActivityThread").invoke(null);
-
-            Field mActivitiesField = activityThreadClass.getDeclaredField("mActivities");
-            mActivitiesField.setAccessible(true);
-            Object mActivitiesObj = mActivitiesField.get(activityThread);
-
-            if (!(mActivitiesObj instanceof Map)) {
-                return null;
-            }
-            Map<?, ?> activitiesMap = (Map<?, ?>) mActivitiesObj;
-
-            for (Object activityClientRecord : activitiesMap.values()) {
-                Activity activity = getNonPausedActivity(activityClientRecord);
-                if (activity != null) {
-                    return activity;
-                }
-            }
-        } catch (ClassNotFoundException ex) {
-            ALog.e("TAG", "ClassNotFoundException occurred: " + ex.getMessage());
-        } catch (InvocationTargetException ex) {
-            ALog.e("TAG", "InvocationTargetException occurred: " + ex.getMessage());
-        } catch (NoSuchMethodException ex) {
-            ALog.e("TAG", "NoSuchMethodException occurred: " + ex.getMessage());
-        } catch (NoSuchFieldException ex) {
-            ALog.e("TAG", "NoSuchFieldException occurred: " + ex.getMessage());
-        } catch (IllegalAccessException ex) {
-            ALog.e("TAG", "IllegalAccessException occurred: " + ex.getMessage());
-        }
-        return null;
-    }
-
-    /**
-     * Extract the Activity in non-paused state from ActivityClientRecord
-     *
-     * @param activityClientRecord The ActivityClientRecord object
-     * @return The Activity object in non-paused state; returns null if none exists
-     * @throws NoSuchFieldException If the field does not exist
-     * @throws IllegalAccessException If the field cannot be accessed
-     */
-    private Activity getNonPausedActivity(Object activityClientRecord)
-            throws NoSuchFieldException, IllegalAccessException {
-        Class<?> recordClass = activityClientRecord.getClass();
-        Field pausedField = recordClass.getDeclaredField("paused");
-        pausedField.setAccessible(true);
-        if (pausedField.getBoolean(activityClientRecord)) {
-            return null;
-        }
-
-        Field activityField = recordClass.getDeclaredField("activity");
-        activityField.setAccessible(true);
-        Object activityObj = activityField.get(activityClientRecord);
-
-        return (activityObj instanceof Activity) ? (Activity) activityObj : null;
+        return com.kira.harmoid.bridge.ActivityTracker.getActivity(context);
     }
 
     /**

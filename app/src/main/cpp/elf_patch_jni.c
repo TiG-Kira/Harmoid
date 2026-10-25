@@ -16,10 +16,17 @@ int elf_patch_got_signal(const char *so_basename,
 int elf_patch_runpath_to_origin(const char *path);
 int elf_load_with_deps(const char *path);
 
+#ifdef HARMOID_STANDALONE_ELF
+#define ELF_JNI(name) Java_com_kira_harmoid_hap_ElfTools_##name
+#else
+#define ELF_JNI(name) Java_com_kira_harmoid_hap_ElfPatcher_##name
+#endif
+
 JNIEXPORT jboolean JNICALL
-Java_com_kira_harmoid_hap_ElfPatcher_patchSo(JNIEnv *env, jclass cls, jstring path)
+ELF_JNI(patchSo)(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
+    if (path == NULL) return JNI_FALSE;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
     if (cpath == NULL) return JNI_FALSE;
 
@@ -28,10 +35,12 @@ Java_com_kira_harmoid_hap_ElfPatcher_patchSo(JNIEnv *env, jclass cls, jstring pa
     return (ret == 0) ? JNI_TRUE : JNI_FALSE;
 }
 
+#ifndef HARMOID_STANDALONE_ELF
 JNIEXPORT jint JNICALL
 Java_com_kira_harmoid_hap_ElfPatcher_patchGot(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
+    if (path == NULL) return 0;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
     if (cpath == NULL) return 0;
 
@@ -65,6 +74,7 @@ Java_com_kira_harmoid_hap_ElfPatcher_patchGot(JNIEnv *env, jclass cls, jstring p
     (*env)->ReleaseStringUTFChars(env, path, cpath);
     return n;
 }
+#endif
 
 /*
  * Load a shared library via dlopen() with topological dependency
@@ -72,16 +82,16 @@ Java_com_kira_harmoid_hap_ElfPatcher_patchGot(JNIEnv *env, jclass cls, jstring p
  * directory are recursively loaded first, then the target is loaded
  * with RTLD_GLOBAL.
  *
- * This bypasses the Android classloader namespace (clns) and loads
- * into the default namespace where RTLD_GLOBAL symbol visibility
- * between DT_NEEDED dependencies works correctly.
+ * All dependencies use the native loader's namespace with RTLD_GLOBAL
+ * visibility. This does not bypass Android linker namespace restrictions.
  *
  * Returns 0 on success, -1 on failure.
  */
 JNIEXPORT jint JNICALL
-Java_com_kira_harmoid_hap_ElfPatcher_nativeLoad(JNIEnv *env, jclass cls, jstring path)
+ELF_JNI(nativeLoad)(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
+    if (path == NULL) return -1;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
     if (cpath == NULL) return -1;
 
@@ -100,9 +110,10 @@ Java_com_kira_harmoid_hap_ElfPatcher_nativeLoad(JNIEnv *env, jclass cls, jstring
  * the file had none or on error.
  */
 JNIEXPORT jboolean JNICALL
-Java_com_kira_harmoid_hap_ElfPatcher_patchRunpath(JNIEnv *env, jclass cls, jstring path)
+ELF_JNI(patchRunpath)(JNIEnv *env, jclass cls, jstring path)
 {
     (void)cls;
+    if (path == NULL) return JNI_FALSE;
     const char *cpath = (*env)->GetStringUTFChars(env, path, NULL);
     if (cpath == NULL) return JNI_FALSE;
 

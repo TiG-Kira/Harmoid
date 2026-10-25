@@ -178,32 +178,41 @@ public class CustomBluetoothManager {
     }
 
     public int registerBluetoothGattServer(int appId, Context context) {
-        BluetoothErrorCode errCode = BluetoothErrorCode.BT_NO_ERROR;
-        if (bluetoothManager_ == null) {
-            return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        }
-        bluetoothGattServerMapLock_.lock();
         try {
-            CustomGattServerCallback gattServerCallback = new CustomGattServerCallback();
-            if (gattServerCallback == null) {
-                errCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR;
-            } else {
-                gattServerCallback.setApplicationId(appId);
-                BluetoothGattServer bluetoothGattServer = bluetoothManager_.openGattServer(context, gattServerCallback);
-                CustomGattServer customGattServer;
-                if (bluetoothGattServer == null || bluetoothGattServerMap_ == null ||
-                   (customGattServer = new CustomGattServer(bluetoothGattServer)) == null) {
+            BluetoothErrorCode errCode = BluetoothErrorCode.BT_NO_ERROR;
+            if (bluetoothManager_ == null) {
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            }
+            bluetoothGattServerMapLock_.lock();
+            try {
+                CustomGattServerCallback gattServerCallback = new CustomGattServerCallback();
+                if (gattServerCallback == null) {
                     errCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR;
                 } else {
-                    bluetoothGattServerMap_.put(appId, customGattServer);
+                    gattServerCallback.setApplicationId(appId);
+                    BluetoothGattServer bluetoothGattServer = bluetoothManager_.openGattServer(context, gattServerCallback);
+                    CustomGattServer customGattServer;
+                    if (bluetoothGattServer == null || bluetoothGattServerMap_ == null ||
+                       (customGattServer = new CustomGattServer(bluetoothGattServer)) == null) {
+                        errCode = BluetoothErrorCode.BT_ERR_INTERNAL_ERROR;
+                    } else {
+                        bluetoothGattServerMap_.put(appId, customGattServer);
+                    }
                 }
+                return errCode.getId();
+            } catch (IllegalArgumentException e) {
+                ALog.e(LOG_TAG, "registerBluetoothGattServer failure, IllegalArgumentException err is " + e);
+                return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
+            } finally {
+                bluetoothGattServerMapLock_.unlock();
             }
-            return errCode.getId();
-        } catch (IllegalArgumentException e) {
-            ALog.e(LOG_TAG, "registerBluetoothGattServer failure, IllegalArgumentException err is " + e);
+
+        } catch (SecurityException e) {
+            android.util.Log.w(LOG_TAG, "registerBluetoothGattServer: Bluetooth permission denied", e);
+            return BluetoothErrorCode.BT_ERR_PERMISSION_FAILED.getId();
+        } catch (RuntimeException e) {
+            android.util.Log.e(LOG_TAG, "registerBluetoothGattServer: Bluetooth operation failed", e);
             return BluetoothErrorCode.BT_ERR_INTERNAL_ERROR.getId();
-        } finally {
-            bluetoothGattServerMapLock_.unlock();
         }
     }
 
@@ -346,12 +355,9 @@ public class CustomBluetoothManager {
         @Override
         public void onScanResult(int callbackType, ScanResult result) {
             super.onScanResult(callbackType, result);
+            if (result == null || result.getDevice() == null) return;
             BluetoothDevice bluetoothDevice = result.getDevice();
-            if (bluetoothDevice.getName() != null) {
-                if (!bluetoothDevice.getName().isEmpty() && !bluetoothDevice.getName().equalsIgnoreCase("null")) {
-                    addBluetoothDevice(bluetoothDevice.getAddress(), bluetoothDevice);
-                }
-            }
+            addBluetoothDevice(bluetoothDevice.getAddress(), bluetoothDevice);
             BluetoothPlugin.nativeOnScanResult(
                 BluetoothHelper.encapsulationBluetoothLeScanResults(result), scannerId_);
         }

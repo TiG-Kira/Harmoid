@@ -55,25 +55,29 @@ private fun makeTag(fieldNumber: Int, wireType: Int): Int =
 
 fun writeVarint(value: Long, out: OutputStream) {
     var v = value
-    while (v >= 0x80) {
+    while ((v and -128L) != 0L) {
         out.write((v.toInt() and 0x7F) or 0x80)
         v = v ushr 7
     }
-    out.write(v.toInt() and 0x7F)
+    out.write(v.toInt())
 }
 
-fun readVarint(input: InputStream): Long {
-    var result: Long = 0
-    var shift = 0
-    while (true) {
-        val b = input.read()
-        if (b < 0) throw java.io.EOFException("Unexpected end of varint stream")
-        result = result or ((b.toLong() and 0x7F) shl shift)
-        if ((b and 0x80) == 0) break
-        shift += 7
+fun readVarint(input: InputStream): Long = readVarintStartingWith(input, input.read())
+
+private fun readVarintStartingWith(input: InputStream, first: Int): Long {
+    var result = 0L
+    var byte = first
+    for (index in 0 until 10) {
+        if (byte < 0) throw java.io.EOFException("Truncated varint")
+        require(index != 9 || byte <= 1) { "Varint exceeds 64 bits" }
+        result = result or ((byte.toLong() and 0x7F) shl (index * 7))
+        if (byte and 0x80 == 0) return result
+        byte = input.read()
     }
-    return result
+    throw IllegalArgumentException("Unterminated varint")
 }
+
+const val MAX_HDC_PACKET_SIZE = 4 * 1024 * 1024
 
 // ── Protobuf-style field writers ────────────────────────────────────────────
 
@@ -108,54 +112,39 @@ fun writeStringField(fieldNumber: Int, value: String, out: OutputStream) {
 class ProtoReader(private val input: InputStream) {
     /** Read next field: returns Pair(tag, wireType) or null at end of stream. */
     fun readTag(): Pair<Int, Int>? {
-        val v = try {
-            readVarintInternal()
-        } catch (_: java.io.EOFException) {
-            return null
-        }
-        if (v == 0L) return null
-        val tag = v.toInt()
-        val fieldNumber = tag ushr 3
-        val wireType = tag and 0x07
-        return Pair(fieldNumber, wireType)
+        val first = input.read()
+        if (first == -1 || first == 0) return null // zero padding in transfer headers
+        val value = readVarintStartingWith(input, first)
+        require(value in 1..0xFFFFFFFFL) { "Invalid protobuf tag" }
+        val tag = value.toInt()
+        val field = tag ushr 3
+        val wire = tag and 7
+        require(field > 0 && wire in setOf(0, 1, 2, 5)) { "Unsupported protobuf field" }
+        return field to wire
     }
 
-    fun readVarint(): Long = readVarintInternal()
-
-    private fun readVarintInternal(): Long {
-        var result: Long = 0
-        var shift = 0
-        while (true) {
-            val b = input.read()
-            if (b < 0) throw java.io.EOFException("Unexpected end of varint stream")
-            result = result or ((b.toLong() and 0x7F) shl shift)
-            if ((b and 0x80) == 0) break
-            shift += 7
-        }
-        return result
-    }
+    fun readVarint(): Long = com.kira.harmoid.hdc.readVarint(input)
 
     fun readString(): String {
-        val len = readVarint().toInt()
-        val buf = ByteArray(len)
-        var offset = 0
-        while (offset < len) {
-            val n = input.read(buf, offset, len - offset)
-            if (n < 0) throw java.io.EOFException("Truncated string field")
-            offset += n
-        }
-        return String(buf, Charsets.UTF_8)
+        val length = readVarint()
+        require(length in 0..MAX_HDC_PACKET_SIZE.toLong()) { "Invalid string length: $length" }
+        return String(readBytes(length.toInt()), Charsets.UTF_8)
     }
 
     fun readBytes(len: Int): ByteArray {
-        val buf = ByteArray(len)
+        require(len in 0..MAX_HDC_PACKET_SIZE) { "Invalid field length: $len" }
+        val buffer = ByteArray(len)
         var offset = 0
         while (offset < len) {
-            val n = input.read(buf, offset, len - offset)
-            if (n < 0) throw java.io.EOFException("Truncated bytes")
-            offset += n
+            val count = input.read(buffer, offset, len - offset)
+            if (count < 0) throw java.io.EOFException("Truncated field")
+            if (count == 0) {
+                val byte = input.read()
+                if (byte < 0) throw java.io.EOFException("Truncated field")
+                buffer[offset++] = byte.toByte()
+            } else offset += count
         }
-        return buf
+        return buffer
     }
 }
 
@@ -272,13 +261,13 @@ data class ChannelHandShake(
         fun fromBytes(bytes: ByteArray): ChannelHandShake? {
             if (bytes.size < CHANNEL_HANDSHAKE_SIZE) return null
             // banner[12]
-            val banner = String(bytes, 0, 12, Charsets.UTF_8).trimEnd(' ')
+            val banner = String(bytes, 0, 12, Charsets.UTF_8).trimEnd('\u0000')
             if (!banner.startsWith("OHOS HDC")) return null
             // union @ offset 12
             val channelId = ByteBuffer.wrap(bytes, 12, 4).order(ByteOrder.LITTLE_ENDIAN).int
-            val connectKey = String(bytes, 12, MAX_CONNECTKEY_SIZE, Charsets.UTF_8).trimEnd(' ')
+            val connectKey = String(bytes, 12, MAX_CONNECTKEY_SIZE, Charsets.UTF_8).trimEnd('\u0000')
             // version @ offset 44
-            val version = String(bytes, 44, BUF_SIZE_TINY, Charsets.UTF_8).trimEnd(' ')
+            val version = String(bytes, 44, BUF_SIZE_TINY, Charsets.UTF_8).trimEnd('\u0000')
             return ChannelHandShake(banner, channelId, connectKey, version)
         }
     }
@@ -433,12 +422,13 @@ private fun skipField(wireType: Int, reader: ProtoReader) {
     when (wireType) {
         WIRE_VARINT -> reader.readVarint()
         WIRE_LENGTH_DELIMITED -> {
-            val len = reader.readVarint().toInt()
-            reader.readBytes(len)
+            val len = reader.readVarint()
+            require(len in 0..MAX_HDC_PACKET_SIZE.toLong()) { "Invalid protobuf field length" }
+            reader.readBytes(len.toInt())
         }
         1 -> reader.readBytes(8)  // FIXED64
         5 -> reader.readBytes(4)  // FIXED32
-        else -> {} // unknown
+        else -> throw IllegalArgumentException("Unsupported wire type: $wireType")
     }
 }
 
@@ -460,11 +450,14 @@ fun buildPacket(channelId: Int, commandFlag: Int, data: ByteArray): ByteArray {
 
 /** Parse one HDC packet from accumulated buffer. Returns Triple(head, protect, data) or null if incomplete. */
 fun parsePacket(buf: ByteArray, offset: Int, length: Int): Triple<PayloadHead, PayloadProtect, ByteArray>? {
+    require(offset >= 0 && length >= 0 && length <= buf.size && offset <= buf.size - length) {
+        "Invalid packet buffer range"
+    }
     if (length < PAYLOAD_HEAD_SIZE) return null
     val head = PayloadHead.fromBytes(buf.copyOfRange(offset, offset + PAYLOAD_HEAD_SIZE)) ?: return null
     val protectSize = head.headSize.toInt() and 0xFFFF
     val dataSize = head.dataSize
-    val totalNeeded = PAYLOAD_HEAD_SIZE + protectSize + dataSize
+    val totalNeeded = packetTotalSize(head)
     if (length < totalNeeded) return null
     val protectBytes = buf.copyOfRange(offset + PAYLOAD_HEAD_SIZE, offset + PAYLOAD_HEAD_SIZE + protectSize)
     val protect = PayloadProtect.fromBytes(protectBytes)
@@ -476,5 +469,9 @@ fun parsePacket(buf: ByteArray, offset: Int, length: Int): Triple<PayloadHead, P
 }
 
 /** Size of a complete packet including header, protect, and payload */
-fun packetTotalSize(head: PayloadHead): Int =
-    PAYLOAD_HEAD_SIZE + (head.headSize.toInt() and 0xFFFF) + head.dataSize
+fun packetTotalSize(head: PayloadHead): Int {
+    require(head.dataSize >= 0) { "Negative HDC data size" }
+    val total = PAYLOAD_HEAD_SIZE.toLong() + (head.headSize.toInt() and 0xFFFF) + head.dataSize
+    require(total <= MAX_HDC_PACKET_SIZE) { "HDC packet exceeds receive buffer" }
+    return total.toInt()
+}

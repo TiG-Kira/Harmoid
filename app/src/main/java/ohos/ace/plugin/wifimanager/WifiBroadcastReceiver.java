@@ -52,10 +52,12 @@ public class WifiBroadcastReceiver {
      * WiFi link status registration listening broadcast
      */
     public void registerConnectReceiver() {
+        if (mWifiConnectReceiver != null) return;
         IntentFilter filter = new IntentFilter();
         filter.addAction(ConnectivityManager.CONNECTIVITY_ACTION);
         mWifiConnectReceiver = new WifiConnectReceiver();
-        context.registerReceiver(mWifiConnectReceiver, filter);
+        androidx.core.content.ContextCompat.registerReceiver(context, mWifiConnectReceiver,
+                filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED);
     }
 
     /**
@@ -64,8 +66,10 @@ public class WifiBroadcastReceiver {
     public void unRegisterConnectReceiver() {
         if (mWifiConnectReceiver == null) {
             ALog.e(TAG, "mWifiConnectReceiver is null");
+            return;
         }
         context.unregisterReceiver(mWifiConnectReceiver);
+        mWifiConnectReceiver = null;
     }
 
     /**
@@ -108,10 +112,12 @@ public class WifiBroadcastReceiver {
      * Registration broadcast of WiFi switch status
      */
     public void registerSwitchReceiver() {
+        if (mWifiSwitchReceiver != null) return;
         IntentFilter filter = new IntentFilter();
         filter.addAction(WifiManager.WIFI_STATE_CHANGED_ACTION);
         mWifiSwitchReceiver = new WifiSwitchBroadcastReceiver();
-        context.registerReceiver(mWifiSwitchReceiver, filter);
+        androidx.core.content.ContextCompat.registerReceiver(context, mWifiSwitchReceiver,
+                filter, androidx.core.content.ContextCompat.RECEIVER_EXPORTED);
     }
 
     /**
@@ -120,8 +126,10 @@ public class WifiBroadcastReceiver {
     public void unRegisterSwitchReceiver() {
         if (mWifiSwitchReceiver == null) {
             ALog.e(TAG, "mWifiSwitchReceiver is null");
+            return;
         }
         context.unregisterReceiver(mWifiSwitchReceiver);
+        mWifiSwitchReceiver = null;
     }
 
     /**

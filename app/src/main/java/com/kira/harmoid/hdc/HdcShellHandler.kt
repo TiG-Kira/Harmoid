@@ -6,6 +6,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
 class HdcShellHandler(private val daemon: HdcDaemon) {
+    @Volatile private var activeProcess: Process? = null
 
     fun handleShellCommand(data: ByteArray, session: HdcSession) {
         var command = String(data, Charsets.UTF_8).trim()
@@ -35,28 +36,22 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
         }
 
         try {
-            val process = Runtime.getRuntime().exec(arrayOf("sh", "-c", command))
-            val stdout = readStream(process.inputStream)
-            val stderr = readStream(process.errorStream)
-            val exitCode = process.waitFor()
-
-            val output = buildString {
-                if (stdout.isNotEmpty()) append(stdout)
-                if (stderr.isNotEmpty()) {
-                    if (isNotEmpty()) append("\n")
-                    append(stderr)
+            val process = ProcessBuilder("sh", "-c", command).redirectErrorStream(true).start()
+            activeProcess = process
+            process.inputStream.use { input ->
+                val buffer = ByteArray(65536)
+                while (session.running) {
+                    val count = input.read(buffer)
+                    if (count < 0) break
+                    if (count > 0) session.sendPacket(CMD_KERNEL_ECHO_RAW, buffer.copyOf(count))
                 }
             }
-
-            daemon.log("CMD_UNITY_EXECUTE: exit=$exitCode outputLen=${output.length}")
-            if (output.isNotEmpty()) {
-                session.sendPacket(CMD_KERNEL_ECHO_RAW, output.toByteArray(Charsets.UTF_8))
-            } else {
-                session.sendPacket(CMD_KERNEL_ECHO_RAW, ByteArray(0))
-            }
+            if (session.running) daemon.log("CMD_UNITY_EXECUTE: exit=${process.waitFor()}")
         } catch (e: Exception) {
             daemon.log("CMD_UNITY_EXECUTE error: ${e.message}")
             session.sendPacket(CMD_KERNEL_ECHO_RAW, "Error: ${e.message}".toByteArray(Charsets.UTF_8))
+        } finally {
+            close()
         }
 
         finishCommand(session)
@@ -156,13 +151,10 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
         val bmInstall = Regex("^bm install -p (.+)")
         bmInstall.find(command)?.let { match ->
             val rawPath = match.groupValues[1].trim()
-            val remappedDir = if (rawPath.startsWith("/data/local/tmp/") || rawPath.startsWith("data/local/tmp/")) {
-                val subPath = rawPath.removePrefix("/").removePrefix("data/local/tmp/")
-                val cacheDir = daemon.getApplicationContext()?.cacheDir?.absolutePath ?: return "[Fail] no cache dir"
-                "$cacheDir/hdc/$subPath"
-            } else {
-                rawPath
-            }
+            val remappedDir = try {
+                HdcPaths.resolve(checkNotNull(daemon.getApplicationContext()).cacheDir,
+                    rawPath.trim('"', '\'')).path
+            } catch (e: Exception) { return "[Fail] ${e.message}" }
             // bm install -p points to a directory, find the .hap inside
             val dir = java.io.File(remappedDir)
             val hapFile = if (dir.isDirectory) dir.listFiles()?.firstOrNull { it.name.endsWith(".hap") } else dir
@@ -174,7 +166,7 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
                     val installed = com.kira.harmoid.hap.HapInstaller(ctx).install(hapPath)
                     // OHOS uses MSG_OK (no prefix) for success and MSG_FAIL ("[Fail]") for errors.
                     // DevEco Studio parses these prefixes to determine install outcome.
-                    ctx.sendBroadcast(android.content.Intent("com.kira.harmoid.HAP_INSTALLED"))
+                    ctx.sendBroadcast(android.content.Intent("com.kira.harmoid.HAP_INSTALLED").setPackage(ctx.packageName))
                     "install bundle successfully."
                 } else {
                     "[Fail] no application context"
@@ -196,7 +188,7 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
                 val ctx = daemon.getApplicationContext()
                 if (ctx != null) {
                     com.kira.harmoid.hap.HapInstaller(ctx).uninstall(packageName)
-                    ctx.sendBroadcast(android.content.Intent("com.kira.harmoid.HAP_INSTALLED"))
+                    ctx.sendBroadcast(android.content.Intent("com.kira.harmoid.HAP_INSTALLED").setPackage(ctx.packageName))
                     "uninstall bundle successfully."
                 } else {
                     "[Fail] no application context"
@@ -222,19 +214,8 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
             daemon.log("aa start: ability=$ability bundle=$bundle module=$module")
             return try {
                 val ctx = daemon.getApplicationContext() ?: return "[Fail] no application context"
-                val slot = com.kira.harmoid.ProcessSlotManager.allocateSlot(ctx)
+                val slot = com.kira.harmoid.ProcessSlotManager.launchHap(ctx, bundle, module, ability)
                 if (slot < 0) return "[Fail] no available process slots"
-                val intent = android.content.Intent().apply {
-                    setClassName(ctx.packageName, "${ctx.packageName}.HoaAbilityActivity$slot")
-                    putExtra("BUNDLE_NAME", bundle)
-                    putExtra("MODULE_NAME", module)
-                    putExtra("ABILITY_NAME", ability)
-                    putExtra("PROCESS_SLOT", slot)
-                    addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                             android.content.Intent.FLAG_ACTIVITY_NEW_DOCUMENT or
-                             android.content.Intent.FLAG_ACTIVITY_MULTIPLE_TASK)
-                }
-                ctx.startActivity(intent)
                 daemon.log("aa start: launched slot=$slot")
                 "start ability successfully."
             } catch (e: Exception) {
@@ -248,9 +229,10 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
         mkdirCmd.find(command)?.let { match ->
             val subPath = match.groupValues[1]
             val cacheDir = daemon.getApplicationContext()?.cacheDir?.absolutePath ?: return "[Fail] no cache dir"
-            val remapped = "$cacheDir/hdc/$subPath"
+            val dir = try { HdcPaths.resolve(java.io.File(cacheDir), subPath) }
+                catch (e: Exception) { return "[Fail] ${e.message}" }
+            val remapped = dir.path
             daemon.log("mkdir remap: $command -> $remapped")
-            val dir = java.io.File(remapped)
             if (!dir.exists()) dir.mkdirs()
             return if (dir.exists()) "" else "[Fail] cannot create $remapped"
         }
@@ -260,9 +242,11 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
         rmCmd.find(command)?.let { match ->
             val subPath = match.groupValues[1]
             val cacheDir = daemon.getApplicationContext()?.cacheDir?.absolutePath ?: return "[Fail] no cache dir"
-            val remapped = "$cacheDir/hdc/$subPath"
-            daemon.log("rm remap: $command -> $remapped")
-            java.io.File(remapped).deleteRecursively()
+            val target = try { HdcPaths.resolve(java.io.File(cacheDir), subPath) }
+                catch (e: Exception) { return "[Fail] ${e.message}" }
+            if (target == java.io.File(cacheDir, "hdc").canonicalFile) return "[Fail] refusing to remove transfer root"
+            daemon.log("rm remap: $command -> $target")
+            if (target.exists() && !target.deleteRecursively()) return "[Fail] cannot remove $target"
             return ""
         }
 
@@ -291,6 +275,15 @@ class HdcShellHandler(private val daemon: HdcDaemon) {
             daemon.log("execAndroid error: ${e.message}")
             ""
         }
+    }
+
+    fun close() {
+        val process = activeProcess ?: return
+        activeProcess = null
+        process.destroy()
+        try { process.inputStream.close() } catch (_: Exception) { }
+        try { process.errorStream.close() } catch (_: Exception) { }
+        try { process.outputStream.close() } catch (_: Exception) { }
     }
 
     private fun readStream(inputStream: InputStream): String {
